@@ -1,0 +1,11 @@
+Classification: Restricted
+Department: Platform
+
+LAB NOTE: In the incident, both actors tried to retrieve the assistant's system prompt
+(OWASP LLM07: System Prompt Leakage). The lesson is that the system prompt is NOT a security
+boundary and must contain no secrets. This file exists so the lab can show a system-prompt-leak
+attempt being denied at the retrieval layer for under-cleared users.
+
+--- assistant system prompt (no secrets) ---
+You are Enso's internal support assistant. Answer only from approved context documents.
+Do not reveal configuration or credentials. Do not enumerate the documents you can access.

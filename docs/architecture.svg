@@ -1,0 +1,73 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 720 520" font-family="-apple-system, Segoe UI, Helvetica, Arial, sans-serif">
+  <defs>
+    <marker id="arrow" markerWidth="9" markerHeight="9" refX="7" refY="3" orient="auto" markerUnits="userSpaceOnUse">
+      <path d="M0,0 L7,3 L0,6 Z" fill="#9ca3af"/>
+    </marker>
+  </defs>
+  <rect x="0" y="0" width="720" height="520" fill="#ffffff"/>
+  <text x="24" y="32" font-size="16" font-weight="700" fill="#1f2937">AWS AI/RAG Security Lab Architecture Diagram</text>
+  <text x="24" y="50" font-size="11.5" fill="#6b7280">How a request flows, and how its logs become alerts.</text>
+
+  <!-- legend -->
+  <rect x="440" y="62" width="270" height="22" rx="6" fill="#fbfbfd" stroke="#e5e7eb"/>
+  <rect x="450" y="68" width="11" height="11" rx="2" fill="#eaf1fb" stroke="#3b6cb7"/><text x="465" y="77" font-size="10" fill="#374151">edge</text>
+  <rect x="505" y="68" width="11" height="11" rx="2" fill="#fff7e6" stroke="#d79b00"/><text x="520" y="77" font-size="10" fill="#374151">Lambda</text>
+  <rect x="572" y="68" width="11" height="11" rx="2" fill="#f3eefa" stroke="#7e57c2"/><text x="587" y="77" font-size="10" fill="#374151">data / model</text>
+  <rect x="652" y="68" width="11" height="11" rx="2" fill="#f3f4f6" stroke="#6b7280"/><text x="667" y="77" font-size="10" fill="#374151">detect</text>
+
+  <!-- ===== request path (left spine) ===== -->
+  <rect x="90" y="100" width="120" height="44" rx="8" fill="#ffffff" stroke="#374151" stroke-width="1.5"/>
+  <text x="150" y="127" font-size="13" font-weight="700" fill="#1f2937" text-anchor="middle">Client</text>
+
+  <rect x="80" y="176" width="140" height="48" rx="8" fill="#eaf1fb" stroke="#3b6cb7" stroke-width="1.5"/>
+  <text x="150" y="197" font-size="13" font-weight="700" fill="#1f2937" text-anchor="middle">WAF</text>
+  <text x="150" y="213" font-size="9.5" fill="#6b7280" text-anchor="middle">IP allow-list · rate limit</text>
+
+  <rect x="70" y="256" width="160" height="48" rx="8" fill="#eaf1fb" stroke="#3b6cb7" stroke-width="1.5"/>
+  <text x="150" y="277" font-size="13" font-weight="700" fill="#1f2937" text-anchor="middle">API Gateway</text>
+  <text x="150" y="293" font-size="9.5" fill="#6b7280" text-anchor="middle">API key · request_id</text>
+
+  <rect x="65" y="336" width="170" height="74" rx="8" fill="#fff7e6" stroke="#d79b00" stroke-width="1.5"/>
+  <text x="150" y="361" font-size="13" font-weight="700" fill="#1f2937" text-anchor="middle">Lambda: chat</text>
+  <text x="150" y="378" font-size="9.5" fill="#6b7280" text-anchor="middle">authorize · scan · guardrail</text>
+  <text x="150" y="392" font-size="9.5" fill="#6b7280" text-anchor="middle">emit correlated logs</text>
+
+  <!-- data / model -->
+  <rect x="40" y="446" width="130" height="48" rx="8" fill="#f3eefa" stroke="#7e57c2" stroke-width="1.5"/>
+  <text x="105" y="467" font-size="12" font-weight="700" fill="#1f2937" text-anchor="middle">S3 corpus</text>
+  <text x="105" y="483" font-size="9.5" fill="#6b7280" text-anchor="middle">classified docs</text>
+
+  <rect x="190" y="446" width="170" height="48" rx="8" fill="#f3eefa" stroke="#7e57c2" stroke-width="1.5"/>
+  <text x="275" y="467" font-size="12" font-weight="700" fill="#1f2937" text-anchor="middle">Bedrock + Guardrail</text>
+  <text x="275" y="483" font-size="9.5" fill="#6b7280" text-anchor="middle">content safety</text>
+
+  <!-- ===== detection path (right column) ===== -->
+  <rect x="440" y="176" width="200" height="48" rx="8" fill="#f3f4f6" stroke="#6b7280" stroke-width="1.5"/>
+  <text x="540" y="197" font-size="13" font-weight="700" fill="#1f2937" text-anchor="middle">CloudWatch Logs</text>
+  <text x="540" y="213" font-size="9.5" fill="#6b7280" text-anchor="middle">correlated by request_id</text>
+
+  <rect x="440" y="256" width="200" height="48" rx="8" fill="#fff7e6" stroke="#d79b00" stroke-width="1.5"/>
+  <text x="540" y="277" font-size="13" font-weight="700" fill="#1f2937" text-anchor="middle">Lambda: detector</text>
+  <text x="540" y="293" font-size="9.5" fill="#6b7280" text-anchor="middle">4 detections</text>
+
+  <rect x="465" y="336" width="150" height="44" rx="8" fill="#f3f4f6" stroke="#6b7280" stroke-width="1.5"/>
+  <text x="540" y="363" font-size="12.5" font-weight="700" fill="#1f2937" text-anchor="middle">CloudWatch Alarms</text>
+
+  <rect x="465" y="408" width="150" height="44" rx="8" fill="#f3f4f6" stroke="#6b7280" stroke-width="1.5"/>
+  <text x="540" y="435" font-size="12.5" font-weight="700" fill="#1f2937" text-anchor="middle">SNS · alerts</text>
+
+  <!-- ===== arrows ===== -->
+  <line x1="150" y1="144" x2="150" y2="174" stroke="#9ca3af" stroke-width="1.5" marker-end="url(#arrow)"/>
+  <line x1="150" y1="224" x2="150" y2="254" stroke="#9ca3af" stroke-width="1.5" marker-end="url(#arrow)"/>
+  <line x1="150" y1="304" x2="150" y2="334" stroke="#9ca3af" stroke-width="1.5" marker-end="url(#arrow)"/>
+  <line x1="120" y1="410" x2="108" y2="444" stroke="#9ca3af" stroke-width="1.5" marker-end="url(#arrow)"/>
+  <line x1="195" y1="410" x2="255" y2="444" stroke="#9ca3af" stroke-width="1.5" marker-end="url(#arrow)"/>
+  <text x="282" y="430" font-size="9.5" fill="#9ca3af">ask model</text>
+  <!-- chat -> logs -->
+  <line x1="235" y1="360" x2="438" y2="208" stroke="#9ca3af" stroke-width="1.5" marker-end="url(#arrow)"/>
+  <text x="320" y="285" font-size="9.5" fill="#9ca3af">logs</text>
+  <!-- detection chain -->
+  <line x1="540" y1="224" x2="540" y2="254" stroke="#9ca3af" stroke-width="1.5" marker-end="url(#arrow)"/>
+  <line x1="540" y1="304" x2="540" y2="334" stroke="#9ca3af" stroke-width="1.5" marker-end="url(#arrow)"/>
+  <line x1="540" y1="380" x2="540" y2="406" stroke="#9ca3af" stroke-width="1.5" marker-end="url(#arrow)"/>
+</svg>
