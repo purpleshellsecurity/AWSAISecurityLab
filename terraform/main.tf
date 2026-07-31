@@ -33,6 +33,12 @@ locals {
   partition  = data.aws_partition.current.partition
   prefix     = var.name_prefix
 
+  # The custom CloudWatch namespace the detector publishes to. Defined ONCE here
+  # because three things must agree on it or the pipeline silently breaks: the
+  # detector's IAM condition (iam.tf), the Lambda's METRIC_NAMESPACE env var,
+  # and the alarms' namespace (detections.tf). One local = one contract.
+  detections_namespace = "AIRagLab/Detections"
+
   # Bedrock invoke targets the Lambda role is scoped to (least privilege). For a cross-region
   # inference profile, IAM needs InvokeModel on the profile ARN AND on the underlying foundation
   # model in each region the profile can route to.

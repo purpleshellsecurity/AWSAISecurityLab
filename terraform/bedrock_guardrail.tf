@@ -28,8 +28,8 @@
 resource "aws_bedrock_guardrail" "this" {
   count = var.controls_enabled ? 1 : 0
 
-  name                      = "${local.prefix}-guardrail"
-  description               = "Prompt-injection, denied-topic, and PII controls for the RAG assistant."
+  name        = "${local.prefix}-guardrail"
+  description = "Prompt-injection, denied-topic, and PII controls for the RAG assistant."
   # Generic block messages: they deliberately do NOT reveal which rule fired or what was detected,
   # so an attacker can't use the error text as an oracle to tune their bypass.
   blocked_input_messaging   = "This request was blocked by the assistant's safety guardrail."
@@ -81,23 +81,23 @@ resource "aws_bedrock_guardrail" "this" {
   # attempts even when the model has been coaxed into producing sensitive data.
   sensitive_information_policy_config {
     pii_entities_config {
-      type   = "EMAIL"
+      type = "EMAIL"
       # ANONYMIZE: emails are common in legitimate answers, so redact rather than hard-block to
       # avoid destroying usefulness while still preventing bulk address harvesting.
       action = "ANONYMIZE"
     }
     pii_entities_config {
-      type   = "US_SOCIAL_SECURITY_NUMBER"
+      type = "US_SOCIAL_SECURITY_NUMBER"
       # BLOCK: an SSN in a response is almost never legitimate here — refuse the whole answer.
       action = "BLOCK"
     }
     pii_entities_config {
-      type   = "CREDIT_DEBIT_CARD_NUMBER"
+      type = "CREDIT_DEBIT_CARD_NUMBER"
       # BLOCK: cardholder data (PCI) must never leave the model — fail closed.
       action = "BLOCK"
     }
     pii_entities_config {
-      type   = "AWS_SECRET_KEY"
+      type = "AWS_SECRET_KEY"
       # BLOCK: catches credential/secret leakage — a model echoing an AWS secret key is a breach.
       action = "BLOCK"
     }
@@ -111,6 +111,17 @@ resource "aws_bedrock_guardrail_version" "this" {
   count         = var.controls_enabled ? 1 : 0
   guardrail_arn = aws_bedrock_guardrail.this[0].guardrail_arn
   description   = "Lab v1"
+
+  # CRITICAL for tunability: guardrail versions are immutable snapshots, and editing the guardrail
+  # resource above (e.g. raising guardrail_prompt_attack_strength) only updates its DRAFT. Without
+  # this lifecycle rule the Lambda would keep pinning the OLD published version and a student's
+  # tuning change would silently never take effect - the exact silent-misconfiguration failure the
+  # variable's validation block exists to prevent. replace_triggered_by republishes a new version
+  # whenever the guardrail config changes; the new version number flows to the Lambda env
+  # automatically via local.guardrail_version.
+  lifecycle {
+    replace_triggered_by = [aws_bedrock_guardrail.this[0]]
+  }
 }
 
 # Bridge values consumed by lambda_chat.tf (and outputs). Because the Guardrail is conditional,

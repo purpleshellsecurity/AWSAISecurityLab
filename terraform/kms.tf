@@ -18,7 +18,7 @@
 # encrypted resource in the lab - it defines exactly which principals and AWS
 # services may use the key, and for what.
 resource "aws_kms_key" "main" {
-  description             = "${local.prefix} CMK for corpus, logs, secrets"
+  description = "${local.prefix} CMK for corpus, logs, secrets"
   # A short deletion window means a destroyed key is only pending-deletion for 7
   # days (min allowed is 7). Long enough to recover from an accidental destroy,
   # short enough for a disposable lab. In production you often want the full 30.
@@ -27,7 +27,7 @@ resource "aws_kms_key" "main" {
   # while keeping the same key ID, so old ciphertext stays readable. Rotating
   # limits the amount of data protected by any single key version - a core
   # key-management best practice and a common compliance requirement.
-  enable_key_rotation     = true
+  enable_key_rotation = true
 
   # The KEY POLICY is the primary access control for a KMS key. Unlike most AWS
   # resources, a key's own policy - not just IAM - governs who can use it. Each
@@ -81,6 +81,50 @@ resource "aws_kms_key" "main" {
         Principal = { Service = "sns.amazonaws.com" }
         Action    = ["kms:Decrypt", "kms:GenerateDataKey*"]
         Resource  = "*"
+        # Same confused-deputy control as the Logs statement above: the SNS
+        # service may only use this key on behalf of THIS account, so a topic in
+        # another account can't be pointed at our CMK.
+        Condition = {
+          StringEquals = {
+            "aws:SourceAccount" = local.account_id
+          }
+        }
+      },
+      {
+        # Statement 4: allow the CloudWatch ALARMS service to publish to the
+        # KMS-encrypted SNS topic. This is distinct from CloudWatch Logs
+        # (statement 2) and easy to miss: alarm actions are executed by the
+        # cloudwatch.amazonaws.com service principal, which must be able to
+        # generate a data key against the topic's CMK or every alarm -> SNS
+        # delivery fails SILENTLY (the alarm still changes state in-console,
+        # the notification just never sends). A guardrail that can't be seen
+        # firing is unverifiable - the delivery path needs this grant.
+        Sid       = "AllowCloudWatchAlarms"
+        Effect    = "Allow"
+        Principal = { Service = "cloudwatch.amazonaws.com" }
+        Action    = ["kms:Decrypt", "kms:GenerateDataKey*"]
+        Resource  = "*"
+        Condition = {
+          StringEquals = {
+            "aws:SourceAccount" = local.account_id
+          }
+        }
+      },
+      {
+        # Statement 5: allow CloudTrail to encrypt the audit-trail log files it
+        # delivers (logging.tf sets kms_key_id on the trail). The encryption-
+        # context condition confines the grant to trails in this account - the
+        # same confused-deputy pattern as the Logs statement.
+        Sid       = "AllowCloudTrailEncrypt"
+        Effect    = "Allow"
+        Principal = { Service = "cloudtrail.amazonaws.com" }
+        Action    = ["kms:GenerateDataKey*", "kms:DescribeKey"]
+        Resource  = "*"
+        Condition = {
+          StringLike = {
+            "kms:EncryptionContext:aws:cloudtrail:arn" = "arn:${local.partition}:cloudtrail:*:${local.account_id}:trail/*"
+          }
+        }
       }
     ]
   })

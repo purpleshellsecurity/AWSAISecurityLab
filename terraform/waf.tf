@@ -2,10 +2,13 @@
 # waf.tf — AWS WAFv2 web ACL in front of the API Gateway stage
 # =============================================================================
 # WAF in front of API Gateway.
-# - Internal-CIDR IPSet: when controls_enabled, block any source NOT in the internal ranges
-#   (the network-layer version of the "service account from external IP" control).
+# - Edge-CIDR IPSet: when the edge is actually restricted (allowed_edge_cidrs narrowed from the open
+#   default — see local.edge_restricted in main.tf), block any source NOT in the allowed ranges.
+#   This keys on the REAL connection IP, independent of the app-layer controls_enabled toggle: the
+#   network perimeter stays up even when the lab is flipped to its vulnerable baseline.
 # - Rate-based rule: blunts the bulk/token-spike abuse pattern.
 # - AWS managed common rule set: baseline web protections.
+# - Full request logging: the outermost hop logs per-request like every other layer.
 #
 # WAF is the outermost enforcement layer — it inspects requests before they ever reach API Gateway.
 # It complements, not duplicates, the API Gateway resource policy: the resource policy is IAM-style
@@ -14,8 +17,9 @@
 # first rule to `block` short-circuits the request.
 # -----------------------------------------------------------------------------
 
-# An IP set holding the ranges considered "internal". Referenced by the block-non-internal rule
-# below. WAF evaluates IP sets very cheaply, so this is an efficient network gate.
+# An IP set holding the edge-allowed ranges (var.allowed_edge_cidrs). Referenced by the
+# block-non-internal rule below. WAF evaluates IP sets very cheaply, so this is an efficient
+# network gate.
 resource "aws_wafv2_ip_set" "internal" {
   name               = "${local.prefix}-internal"
   scope              = "REGIONAL"
@@ -79,7 +83,7 @@ resource "aws_wafv2_web_acl" "this" {
     statement {
       rate_based_statement {
         # limit = max requests per IP per 5 min before blocking (var-driven so you can tune it).
-        limit              = var.rate_limit_per_5min
+        limit = var.rate_limit_per_5min
         # Aggregate by source IP: each IP gets its own counter.
         aggregate_key_type = "IP"
       }
@@ -127,4 +131,21 @@ resource "aws_wafv2_web_acl" "this" {
 resource "aws_wafv2_web_acl_association" "this" {
   resource_arn = aws_api_gateway_stage.prod.arn
   web_acl_arn  = aws_wafv2_web_acl.this.arn
+}
+
+# ---------- WAF request logging ----------
+# Metrics + sampled requests (above) tell you THAT a rule fired; only full WAF logs tell you WHICH
+# request, WHICH rule, and WHAT terminating action — and blocked attacks are precisely the events
+# this lab wants auditable. Without this, the outermost hop is the only layer in the stack with no
+# per-request log, breaking the end-to-end correlation story at its first link.
+# The log group name MUST start with "aws-waf-logs-" — WAF rejects any other destination name.
+resource "aws_cloudwatch_log_group" "waf" {
+  name              = "aws-waf-logs-${local.prefix}"
+  retention_in_days = 30                   # same bounded retention as the other log groups
+  kms_key_id        = aws_kms_key.main.arn # same CMK encryption as the other log groups
+}
+
+resource "aws_wafv2_web_acl_logging_configuration" "this" {
+  resource_arn            = aws_wafv2_web_acl.this.arn
+  log_destination_configs = [aws_cloudwatch_log_group.waf.arn]
 }

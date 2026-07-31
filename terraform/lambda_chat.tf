@@ -33,17 +33,17 @@ data "archive_file" "chat" {
 resource "aws_lambda_function" "chat" {
   function_name = "${local.prefix}-chat"
   # The execution role is the Lambda's identity to the rest of AWS. Whatever this role can do,
-  # a compromised handler can do — so it should grant only the specific S3/Bedrock/Secrets actions
-  # the app needs, nothing broader.
-  role          = aws_iam_role.chat.arn
-  runtime       = "python3.12"
-  handler       = "handler.lambda_handler"
+  # a compromised handler can do — so it should grant only the specific S3/Bedrock actions
+  # the app needs, nothing broader (see iam.tf for why there is no Secrets Manager grant).
+  role    = aws_iam_role.chat.arn
+  runtime = "python3.12"
+  handler = "handler.lambda_handler"
   # A bounded timeout caps how long a single abusive/looping request can consume resources
   # (cost + concurrency exhaustion are real DoS vectors for LLM apps — cf. LLM04 unbounded consumption).
-  timeout       = 30
-  memory_size   = 256
+  timeout     = 30
+  memory_size = 256
 
-  filename         = data.archive_file.chat.output_path
+  filename = data.archive_file.chat.output_path
   # Tying the deployed artifact to the archive's hash guarantees the running function matches the
   # audited source; drift would silently ship un-reviewed code.
   source_code_hash = data.archive_file.chat.output_base64sha256
@@ -52,21 +52,18 @@ resource "aws_lambda_function" "chat" {
   # runs as the vulnerable baseline or the remediated build depending on CONTROLS_ENABLED.
   environment {
     variables = {
-      CORPUS_BUCKET     = aws_s3_bucket.corpus.id
-      MODEL_ID          = var.bedrock_model_id
+      CORPUS_BUCKET = aws_s3_bucket.corpus.id
+      MODEL_ID      = var.bedrock_model_id
       # Guardrail id/version are passed in so the handler can attach the model-layer control
       # (bedrock_guardrail.tf) on every InvokeModel call. Empty when controls are disabled.
       GUARDRAIL_ID      = local.guardrail_id
       GUARDRAIL_VERSION = local.guardrail_version
-      # The Lambda reads service credentials from Secrets Manager by ID at runtime — secrets are
-      # never baked into the code or env as plaintext values.
-      SERVICE_SECRET_ID = aws_secretsmanager_secret.svc_creds.id
       # Ranges the app treats as internal; used to flag/deny the "service account from external IP"
       # pattern at the application layer.
-      INTERNAL_CIDRS    = join(",", var.internal_cidrs)
+      INTERNAL_CIDRS = join(",", var.internal_cidrs)
       # Master toggle: false = intentionally vulnerable baseline, true = remediated. Lets students
       # A/B the same deployment against the same attacks.
-      CONTROLS_ENABLED  = tostring(var.controls_enabled)
+      CONTROLS_ENABLED = tostring(var.controls_enabled)
     }
   }
 
@@ -85,5 +82,5 @@ resource "aws_lambda_permission" "apigw_invoke_chat" {
   function_name = aws_lambda_function.chat.function_name
   principal     = "apigateway.amazonaws.com"
   # "/*/*" = any stage / any method on THIS api's execution ARN — scoped to this API, not "*".
-  source_arn    = "${aws_api_gateway_rest_api.this.execution_arn}/*/*"
+  source_arn = "${aws_api_gateway_rest_api.this.execution_arn}/*/*"
 }

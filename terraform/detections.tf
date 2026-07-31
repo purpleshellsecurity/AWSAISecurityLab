@@ -13,8 +13,8 @@
 #   action)--> SNS topic --> email.
 # This is the "detect & respond" complement to the preventive controls (WAF/Guardrail/authz). Even
 # when prevention holds, these detections surface abuse attempts so a human is alerted. The four
-# detections map to the incident's attack patterns (external service-account use, sensitive-doc
-# access anomalies, token-volume spikes, and indirect/RAG-borne injection).
+# detections map to the incident's attack patterns: (1) external service-account use, (2) sensitive-
+# doc access anomalies, (3) indirect/RAG-borne injection, and (4) token-volume spikes.
 # -----------------------------------------------------------------------------
 
 # ---------- SNS alarm topic ----------
@@ -34,7 +34,7 @@ resource "aws_sns_topic_subscription" "email" {
   endpoint  = var.alarm_email
 }
 
-# ---------- Rolling baseline state for Detection 3 ----------
+# ---------- Rolling baseline state for Detection 4 ----------
 # Stores each principal's rolling token-usage baseline. Using a learned per-principal baseline
 # (rather than one global static threshold) is the whole point: it flags a caller deviating from
 # ITS OWN normal, catching low-and-slow abuse a fixed number would miss and cutting false positives
@@ -81,21 +81,21 @@ resource "aws_lambda_function" "detector" {
   source_code_hash = data.archive_file.detector.output_base64sha256
 
   # Detection tuning/config passed in as env vars so behavior can change without editing code.
+  # (The detector reads the chat logs' pre-computed internal_source flag, so it does NOT need the
+  # CIDR list itself - config the code doesn't read is not passed, mirroring the IAM discipline.)
   environment {
     variables = {
-      # Ranges considered internal — Detection 1 flags a known service account seen from outside these.
-      INTERNAL_CIDRS         = join(",", var.internal_cidrs)
-      BASELINE_TABLE         = aws_dynamodb_table.baseline.name
-      SNS_TOPIC_ARN          = aws_sns_topic.alarms.arn
-      # How many times over its own baseline a principal's token usage must jump to trip Detection 3.
+      BASELINE_TABLE = aws_dynamodb_table.baseline.name
+      SNS_TOPIC_ARN  = aws_sns_topic.alarms.arn
+      # How many times over its own baseline a principal's token usage must jump to trip Detection 4.
       TOKEN_DEVIATION_FACTOR = tostring(var.token_deviation_factor)
-      METRIC_NAMESPACE       = "AIRagLab/Detections"
-      # Service accounts that are allowed to be high-volume (Detection 3 allowlist).
-      # Prevents the legitimate bulk indexer from constantly tripping the token-spike detection.
-      HIGH_VOLUME_ALLOWLIST = "batch-indexer"
-      # Known service accounts (Detection 2). Mirrors the incident's accounts.
+      METRIC_NAMESPACE       = local.detections_namespace
+      # Principals allowed to be high-volume (Detection 4 allowlist). Prevents the legitimate bulk
+      # indexer from constantly tripping the token-spike detection.
+      HIGH_VOLUME_ALLOWLIST = join(",", var.high_volume_allowlist)
+      # Known service accounts (Detection 1). Mirrors the incident's accounts.
       # Detection keys on these identities to spot misuse of a real service account.
-      SERVICE_ACCOUNTS = "enso-rag-svc,enso-vector-svc,enso-assistant-api"
+      SERVICE_ACCOUNTS = join(",", var.service_accounts)
     }
   }
 
@@ -131,8 +131,8 @@ locals {
   detections = {
     "service-account-external-source" = "ServiceAccountExternalSource" # Detection 1: known svc acct from external IP
     "sensitive-retrieval-anomaly"     = "SensitiveRetrievalAnomaly"    # Detection 2: unusual access to sensitive docs
-    "token-volume-deviation"          = "TokenSpike"                   # Detection 3: token usage above learned baseline
-    "indirect-injection"              = "IndirectInjection"            # Detection 4: injection payload found in retrieved content
+    "indirect-injection"              = "IndirectInjection"            # Detection 3: injection payload found in retrieved content
+    "token-volume-deviation"          = "TokenSpike"                   # Detection 4: token usage above learned baseline
   }
 }
 
@@ -142,16 +142,40 @@ resource "aws_cloudwatch_metric_alarm" "detections" {
   for_each = local.detections
 
   alarm_name          = "${local.prefix}-${each.key}"
-  namespace           = "AIRagLab/Detections"
+  namespace           = local.detections_namespace
   metric_name         = each.value
-  statistic           = "Sum"       # count occurrences in the window
-  period              = 60          # 60s evaluation window — fast alerting
-  evaluation_periods  = 1           # alarm on the first breaching window (no waiting for a trend)
-  threshold           = 1           # >= 1 detection event = alarm; these are high-signal events
+  statistic           = "Sum" # count occurrences in the window
+  period              = 60    # 60s evaluation window — fast alerting
+  evaluation_periods  = 1     # alarm on the first breaching window (no waiting for a trend)
+  threshold           = 1     # >= 1 detection event = alarm; these are high-signal events
   comparison_operator = "GreaterThanOrEqualToThreshold"
   # No data = no detections = healthy; don't alarm on the (normal) absence of hits.
-  treat_missing_data  = "notBreaching"
-  alarm_description   = "Detection fired: ${each.key}"
-  alarm_actions       = [aws_sns_topic.alarms.arn] # notify on ALARM
-  ok_actions          = [aws_sns_topic.alarms.arn] # also notify on return-to-OK, closing the loop
+  treat_missing_data = "notBreaching"
+  alarm_description  = "Detection fired: ${each.key}"
+  alarm_actions      = [aws_sns_topic.alarms.arn] # notify on ALARM
+  ok_actions         = [aws_sns_topic.alarms.arn] # also notify on return-to-OK, closing the loop
+}
+
+# ---------- Dead-man switch for the detection pipeline itself ----------
+# All four detections share one single point of failure: the detector Lambda. If a bad deploy or a
+# persistent exception kills it, no metrics are published — and because the detection alarms treat
+# missing data as notBreaching (correct for "no detections = healthy"), a dead detector looks
+# EXACTLY like a quiet, healthy system. This alarm watches the function's own Errors metric so the
+# pipeline's failure is itself detected. A monitoring pipeline nobody monitors is unverifiable.
+resource "aws_cloudwatch_metric_alarm" "detector_errors" {
+  alarm_name  = "${local.prefix}-detector-errors"
+  namespace   = "AWS/Lambda"
+  metric_name = "Errors"
+  dimensions = {
+    FunctionName = aws_lambda_function.detector.function_name
+  }
+  statistic           = "Sum"
+  period              = 300 # 5-minute window: Lambda service metrics are coarser than the custom ones
+  evaluation_periods  = 1
+  threshold           = 1
+  comparison_operator = "GreaterThanOrEqualToThreshold"
+  treat_missing_data  = "notBreaching" # no invocations (or no errors) = healthy
+  alarm_description   = "The detector Lambda is failing — the detection pipeline is blind until this is fixed."
+  alarm_actions       = [aws_sns_topic.alarms.arn]
+  ok_actions          = [aws_sns_topic.alarms.arn]
 }

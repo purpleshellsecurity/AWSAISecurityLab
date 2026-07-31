@@ -42,6 +42,7 @@ CI runs these; run them locally first:
 terraform -chdir=terraform fmt -check -recursive && terraform -chdir=terraform validate
 python -m py_compile src/chat/handler.py src/detector/handler.py demo/replay.py
 python -c "import json,glob;[json.load(open(f)) for f in glob.glob('demo/scenarios/*.json')]"
+python -m pytest tests/ -q   # unit tests for both Lambdas (pip install pytest boto3)
 ```
 
 ## How to extend the lab

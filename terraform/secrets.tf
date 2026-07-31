@@ -26,16 +26,18 @@ resource "random_password" "svc_token" {
 
 # aws_secretsmanager_secret.svc_creds: the secret container - metadata, name,
 # and (critically) the encryption key. This is where the enso-rag-svc credential
-# SHOULD live. Only the chat Lambda role is granted GetSecretValue on this exact
-# ARN (see iam.tf), so access is least-privilege and fully auditable in
-# CloudTrail.
+# SHOULD live. Note that NO role in this lab is granted GetSecretValue on it -
+# the chat handler never reads the credential, and iam.tf deliberately does not
+# grant a permission the code doesn't exercise. The vault is the teaching
+# contrast to the incident's mistake (credential in the corpus); any future
+# consumer would get a grant scoped to this exact ARN, auditable in CloudTrail.
 resource "aws_secretsmanager_secret" "svc_creds" {
   name        = "${local.prefix}/service-account/enso-rag-svc"
   description = "Where the enso-rag-svc service credential SHOULD live (not in the corpus)."
   # Encrypt the secret at rest with the lab CMK (not the default AWS-managed
   # key), so the KMS key policy provides an independent second gate on who can
   # actually decrypt the credential.
-  kms_key_id  = aws_kms_key.main.arn
+  kms_key_id = aws_kms_key.main.arn
 
   # Lab convenience: hard-delete on destroy (no 30-day recovery window) so the name frees up
   # immediately and the lab can be torn down and redeployed cleanly.

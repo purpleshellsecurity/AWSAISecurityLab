@@ -28,7 +28,7 @@ provider "aws" {
       Source  = "rag-incident-reproduction"
       # Owner establishes accountability - who to contact if a resource behaves
       # unexpectedly or needs to be torn down.
-      Owner   = var.owner
+      Owner = var.owner
     }
   }
 }

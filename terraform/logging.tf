@@ -25,7 +25,7 @@
 # decisions. This is the source stream the detector subscribes to (see detections.tf).
 resource "aws_cloudwatch_log_group" "chat" {
   name              = "/aws/lambda/${local.prefix}-chat"
-  retention_in_days = 30 # bounded retention: cost + data-minimization
+  retention_in_days = 30                   # bounded retention: cost + data-minimization
   kms_key_id        = aws_kms_key.main.arn # encrypt logs at rest with a customer-managed key
 }
 
@@ -58,6 +58,49 @@ resource "aws_cloudwatch_log_group" "bedrock_invocations" {
 resource "aws_s3_bucket" "trail" {
   bucket        = "${local.prefix}-cloudtrail-${local.account_id}"
   force_destroy = true
+}
+
+# Encrypt delivered trail objects with the lab CMK by default (the trail also sets kms_key_id, so
+# log files are SSE-KMS end to end). The audit trail is the record an attacker most wants to read
+# or tamper with — it gets the same CMK boundary as every other data store in the lab, not the
+# weaker SSE-S3 default it would otherwise land under.
+resource "aws_s3_bucket_server_side_encryption_configuration" "trail" {
+  bucket = aws_s3_bucket.trail.id
+  rule {
+    apply_server_side_encryption_by_default {
+      sse_algorithm     = "aws:kms"
+      kms_master_key_id = aws_kms_key.main.arn
+    }
+    bucket_key_enabled = true
+  }
+}
+
+# Versioning on the audit bucket: tamper-evidence for the evidence. An overwrite or delete of a
+# trail object leaves the prior version recoverable — complementing the trail's own digest-file
+# validation below.
+resource "aws_s3_bucket_versioning" "trail" {
+  bucket = aws_s3_bucket.trail.id
+  versioning_configuration {
+    status = "Enabled"
+  }
+}
+
+# Bounded retention, mirroring the 30-day cap on the log groups: the lab's log stores should not
+# grow without limit (cost + data minimization). 90 days of trail history is plenty for lab
+# forensics; production audit trails typically retain far longer (often to Glacier).
+resource "aws_s3_bucket_lifecycle_configuration" "trail" {
+  bucket = aws_s3_bucket.trail.id
+  rule {
+    id     = "expire-trail-objects"
+    status = "Enabled"
+    filter {}
+    expiration {
+      days = 90
+    }
+    noncurrent_version_expiration {
+      noncurrent_days = 30
+    }
+  }
 }
 
 # Belt-and-suspenders public-access block: guarantees the audit log bucket can never be exposed
@@ -114,11 +157,29 @@ resource "aws_cloudtrail" "main" {
   include_global_service_events = true
   is_multi_region_trail         = false # single-region: lab scope; prod audit trails are usually multi-region
   enable_log_file_validation    = true  # tamper-evident digest files
+  # Encrypt delivered log files with the lab CMK (requires the AllowCloudTrailEncrypt statement in
+  # the key policy, kms.tf). Reading the audit trail then needs kms:Decrypt on the CMK — the same
+  # independent second gate that protects the corpus.
+  kms_key_id = aws_kms_key.main.arn
 
-  # Capture Bedrock data-plane events so model invocations are auditable.
-  # Management events log control-plane changes; DATA events (opt-in, extra cost) log the actual
-  # resource-level operations — here, use of the Guardrail — giving an audit record of guardrail
-  # activity to correlate with the invocation logs below.
+  # GOTCHA worth knowing: when ANY advanced_event_selector is used, management events are only
+  # recorded if a selector explicitly asks for them. A trail with only a Data selector records no
+  # control-plane activity at all — "who changed IAM / read the secret" would be silently absent.
+  # So the trail declares BOTH selectors:
+
+  # Management events: the control-plane audit record (who called which AWS API — IAM changes,
+  # secret reads, KMS grants). This is the half investigators reach for first.
+  advanced_event_selector {
+    name = "Management events"
+    field_selector {
+      field  = "eventCategory"
+      equals = ["Management"]
+    }
+  }
+
+  # Bedrock DATA events (opt-in, extra cost): the actual resource-level operations — here, use of
+  # the Guardrail — giving an audit record of guardrail activity to correlate with the invocation
+  # logs below.
   advanced_event_selector {
     name = "Bedrock data events"
     field_selector {
@@ -169,6 +230,12 @@ resource "aws_iam_role_policy" "bedrock_logging" {
 
 # Account-level config that turns on model-invocation logging. This captures the actual model I/O —
 # the ground truth for investigating prompt injection / data-leak attempts.
+#
+# BLAST-RADIUS WARNING: this is a per-account/per-region SINGLETON, like aws_api_gateway_account.
+# Applying it ADOPTS (and overwrites) any invocation-logging config the account already had, and
+# `terraform destroy` REMOVES it — turning off Bedrock invocation logging for everything else in
+# this account/region. Fine in a dedicated lab account; in a shared account, check what exists
+# before deploying and re-enable the original config after teardown.
 resource "aws_bedrock_model_invocation_logging_configuration" "main" {
   logging_config {
     # Log text prompts/completions only. Embeddings and images are disabled to minimize the volume

@@ -87,14 +87,14 @@ data "aws_iam_policy_document" "chat" {
     resources = [aws_s3_bucket.corpus.arn, "${aws_s3_bucket.corpus.arn}/*"]
   }
 
-  # ReadServiceSecret: fetch ONLY the one service-account secret, by exact ARN.
-  # The app can retrieve the credential it legitimately needs and cannot
-  # enumerate or read any other secret in the account.
-  statement {
-    sid       = "ReadServiceSecret"
-    actions   = ["secretsmanager:GetSecretValue"]
-    resources = [aws_secretsmanager_secret.svc_creds.arn]
-  }
+  # NOTE - deliberately absent: a secretsmanager:GetSecretValue grant. The
+  # service-account secret (secrets.tf) exists to teach WHERE credentials
+  # belong (the vault, not the corpus), but the handler never reads it - and a
+  # role should never hold a permission its code cannot exercise. An unused
+  # standing grant on the internet-facing role is exactly the LLM06
+  # excessive-agency pattern this file teaches against: if prompt injection
+  # ever compromises the handler, an unused grant is pure attacker capability.
+  # Ship the policy that matches how the code actually calls its APIs.
 
   # UseKms: the decrypt path. Without this the app couldn't read the
   # KMS-encrypted S3 objects or secret even with the permissions above - KMS is
@@ -151,7 +151,7 @@ data "aws_iam_policy_document" "detector" {
     condition {
       test     = "StringEquals"
       variable = "cloudwatch:namespace"
-      values   = ["AIRagLab/Detections"]
+      values   = [local.detections_namespace]
     }
   }
 
