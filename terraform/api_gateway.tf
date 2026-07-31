@@ -83,13 +83,13 @@ resource "aws_api_gateway_resource" "chat" {
 
 # POST /chat method definition. This is where the API-key requirement is declared.
 resource "aws_api_gateway_method" "chat_post" {
-  rest_api_id      = aws_api_gateway_rest_api.this.id
-  resource_id      = aws_api_gateway_resource.chat.id
-  http_method      = "POST"
+  rest_api_id = aws_api_gateway_rest_api.this.id
+  resource_id = aws_api_gateway_resource.chat.id
+  http_method = "POST"
   # authorization = NONE: no IAM/Cognito/custom authorizer in this lab — auth is by API key only.
   # In production an API key is an identifier/throttling handle, not a strong authenticator; it
   # would typically be paired with a JWT/IAM authorizer. The lab keeps it simple on purpose.
-  authorization    = "NONE"
+  authorization = "NONE"
   # Require a valid API key on every call. Combined with the usage plan below this gives per-caller
   # identity and rate limiting, and populates $context.identity.apiKeyId in the access log.
   api_key_required = true
@@ -184,6 +184,15 @@ resource "aws_api_gateway_usage_plan" "this" {
   throttle_settings {
     rate_limit  = 20
     burst_limit = 40
+  }
+
+  # A hard daily quota is the control that actually caps spend. Throttling alone bounds the RATE,
+  # not the TOTAL: 20 rps sustained is ~1.7M requests/day per key, each a billable Bedrock call —
+  # the denial-of-wallet exposure (LLM04) this lab teaches about. 2,000/day is far above any demo
+  # run but turns a leaked key from an unbounded liability into a bounded one.
+  quota_settings {
+    limit  = 2000
+    period = "DAY"
   }
 }
 

@@ -37,6 +37,12 @@ resource "aws_iam_role_policy_attachment" "apigw_cloudwatch" {
 # The account-level setting that registers the role. Note this is GLOBAL to the account/region —
 # it affects every API in the account, which is why it lives in its own file and the prod stage
 # depends_on it. depends_on the attachment ensures the role can actually log before it's registered.
+#
+# BLAST-RADIUS WARNING: because this is a per-account/per-region singleton, applying it OVERWRITES
+# any CloudWatch role the account had registered, and `terraform destroy` RESETS the setting —
+# killing access/execution logging for EVERY other API Gateway in this account/region, not just the
+# lab's. Fine in a dedicated lab account; in a shared account, note the existing role ARN before
+# deploying so you can restore it after teardown.
 resource "aws_api_gateway_account" "this" {
   cloudwatch_role_arn = aws_iam_role.apigw_cloudwatch.arn
   depends_on          = [aws_iam_role_policy_attachment.apigw_cloudwatch]

@@ -167,9 +167,29 @@ variable "rate_limit_per_5min" {
 # denial-of-wallet) - if a principal suddenly burns this many times its
 # historical token baseline, an alarm fires. Lower = more sensitive.
 variable "token_deviation_factor" {
-  description = "Detection 3: alert when a principal's windowed token usage exceeds baseline by this factor."
+  description = "Detection 4: alert when a principal's windowed token usage exceeds baseline by this factor."
   type        = number
   default     = 10
+}
+
+# service_accounts: the identities Detection 1 treats as service accounts. Seeing
+# any of these authenticate from a non-internal source is the incident's initial-
+# access signature. A variable (not a hard-coded env string) because detection
+# identity lists are tuning knobs, same as token_deviation_factor.
+variable "service_accounts" {
+  description = "Detection 1: identities treated as service accounts; any use from a non-internal source alerts."
+  type        = list(string)
+  default     = ["enso-rag-svc", "enso-vector-svc", "enso-assistant-api"]
+}
+
+# high_volume_allowlist: principals exempt from Detection 4 (token-volume
+# deviation). Legitimate bulk jobs (e.g. a batch indexer) would otherwise trip
+# the spike detection constantly - allow-listing them is standard detection
+# tuning to keep the alert high-signal.
+variable "high_volume_allowlist" {
+  description = "Detection 4: principals exempt from the token-volume deviation detection (known bulk jobs)."
+  type        = list(string)
+  default     = ["batch-indexer"]
 }
 
 # alarm_email: where security alarms are delivered. Optional so the lab runs

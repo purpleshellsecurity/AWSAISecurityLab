@@ -34,13 +34,13 @@ resource "aws_s3_bucket" "corpus" {
 # a future misconfiguration that tries to make an object or the bucket public is
 # neutralized.
 resource "aws_s3_bucket_public_access_block" "corpus" {
-  bucket                  = aws_s3_bucket.corpus.id
+  bucket = aws_s3_bucket.corpus.id
   # Reject any attempt to attach a public ACL to the bucket or its objects.
-  block_public_acls       = true
+  block_public_acls = true
   # Reject any bucket policy that would grant public access.
-  block_public_policy     = true
+  block_public_policy = true
   # Ignore any public ACLs that somehow already exist (belt-and-suspenders).
-  ignore_public_acls      = true
+  ignore_public_acls = true
   # Restrict access so only AWS principals (not anonymous) can reach the bucket,
   # even if a public policy slipped through.
   restrict_public_buckets = true
@@ -73,6 +73,21 @@ resource "aws_s3_bucket_versioning" "corpus" {
   bucket = aws_s3_bucket.corpus.id
   versioning_configuration {
     status = "Enabled"
+  }
+}
+
+# Expire superseded (noncurrent) versions after 30 days. Versioning above is the recovery control;
+# this bounds its cost and data-retention tail - old copies of corpus documents (which include
+# sensitive material by design) should not accumulate indefinitely.
+resource "aws_s3_bucket_lifecycle_configuration" "corpus" {
+  bucket = aws_s3_bucket.corpus.id
+  rule {
+    id     = "expire-noncurrent-versions"
+    status = "Enabled"
+    filter {}
+    noncurrent_version_expiration {
+      noncurrent_days = 30
+    }
   }
 }
 
@@ -117,5 +132,13 @@ resource "aws_s3_object" "corpus_files" {
   # comparing against the KMS-mangled ETag.
   source_hash = filemd5("${path.module}/../corpus/${each.value}")
 
-  # Note: server-side encryption is enforced by the bucket default above.
+  # Server-side encryption is enforced by the bucket default - BUT only for objects uploaded after
+  # that configuration exists. Terraform is otherwise free to upload these objects in parallel with
+  # (or before) the SSE/public-access-block resources on a first apply, and an object that lands
+  # early keeps its weaker SSE-S3 encryption forever (it is never re-encrypted). The explicit
+  # depends_on removes the race so the CMK gate genuinely covers every corpus object.
+  depends_on = [
+    aws_s3_bucket_server_side_encryption_configuration.corpus,
+    aws_s3_bucket_public_access_block.corpus,
+  ]
 }
