@@ -23,7 +23,7 @@ OWASP LLM (2025) category it addresses, the Terraform that deploys it, and the d
 | Service account from non-internal source | API request authenticated as a known service account where `source_ip` ∉ internal CIDRs | High | timestamp, service_account, source_ip, endpoint, request_count, tokens_used, user_agent |
 | Sensitive retrieval anomaly | A `Restricted`/`Confidential` doc actually **reaches the user** — `action = leaked_unauthorized`, or `retrieved` during a session with a high-risk prompt. Blocked/quarantined docs do **not** fire it (the control already stopped them). | High | user, session_id, document_name, sensitivity, retrieval_score, action |
 | Indirect prompt injection / RAG poisoning | A retrieved document contained injection markers (`injection_in_document`) — whether it was quarantined (controls on) or leaked (controls off) | High | user, session_id, document_name, action |
-| Per-principal token-volume deviation | Windowed token usage > baseline × deviation factor (default 10×) for a principal not on the high-volume allowlist | Medium | principal, tokens_used, baseline, endpoint |
+| Per-principal token-volume deviation | Windowed token usage > baseline × deviation factor (default 10×) for a principal not on the high-volume allowlist | Medium | principal, tokens_used, baseline, request_id |
 
 The keyword-on-"audit"/"admin" idea is intentionally **not** a standalone detection
 (too noisy — the audit dept uses that language normally). It is available as an enrichment field on

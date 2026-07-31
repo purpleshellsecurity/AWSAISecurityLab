@@ -55,7 +55,9 @@ Each attack maps to a control, a framework, and a replayable scenario (full deta
 - **Bedrock access** — Anthropic models need a one-time use-case form; `./scripts/preflight.sh` tells you where to click
 - Default region **`us-east-1`**
 
-*Runs at a few cents/day and is fully reversible.*
+*Usage costs a few cents/day, and everything is torn down by one `destroy`. Note the always-on
+baseline: the WAF web ACL, KMS key, and CloudTrail Bedrock data events bill roughly **$10–15/month
+even at zero traffic** — destroy the lab when you're not using it.*
 
 ### 1. Deploy
 
@@ -96,6 +98,12 @@ Write your own by copying a file in [`demo/scenarios/`](demo/scenarios/README.md
 ```bash
 terraform -chdir=terraform destroy   # stops the cost
 ```
+
+> **Shared-account caveat:** the lab manages two per-account/per-region singletons — the API Gateway
+> CloudWatch-logging role and the Bedrock model-invocation logging config. In a **dedicated lab
+> account** (recommended) this is a non-issue; in a shared account, `destroy` resets both, which
+> disables API Gateway access logging and Bedrock invocation logging for everything else in that
+> account/region. Note the pre-existing settings before deploying so you can restore them.
 
 ---
 

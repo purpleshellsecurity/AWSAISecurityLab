@@ -12,7 +12,7 @@ your logs with realistic activity and exercise the controls + detections.
 ```
 
 Run the baseline first (`01_baseline_normal.json`) — it establishes clean traffic and seeds the
-per-principal token baselines that detection 3 compares against.
+per-principal token baselines that detection 4 compares against.
 
 ## What's here
 
@@ -39,7 +39,7 @@ Copy any file and edit the `requests` list. Schema:
     {
       "phase": "label",          // free-text tag shown in replay output (group related requests)
       "user": "e.davis",          // identity; clearance comes from corpus/manifest.json
-      "service_account": "enso-rag-svc", // optional; becomes the principal for the api_access log + detection 2
+      "service_account": "enso-rag-svc", // optional; becomes the principal for the api_access log + detection 1
       "x_source_ip": "198.51.100.23",  // simulated source IP (checked against internal_cidrs by the Lambda)
       "session_id": "sess-1300",     // ties related requests together in the logs
       "prompt": "the user's message",

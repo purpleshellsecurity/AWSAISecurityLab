@@ -65,7 +65,7 @@ blocked (the fix).
   inference profile, because Haiku 4.5 is INFERENCE_PROFILE-only). IAM therefore grants `InvokeModel`
   on the profile ARN *and* the underlying foundation-model ARN in each routed region — see
   `local.bedrock_invoke_resources` in `main.tf`.
-- **DynamoDB for the token baseline** — detection 3 (per-principal token deviation) keeps a rolling
+- **DynamoDB for the token baseline** — detection 4 (per-principal token deviation) keeps a rolling
   EWMA baseline, not a static threshold; DynamoDB on-demand holds it. ~free at lab scale.
 - **Two "lab affordances"**: the request body accepts `x_source_ip` and `simulate_tokens` so attacks
   can be reproduced without infra outside AWS. In production these come from the real connection and
@@ -119,7 +119,7 @@ Or by hand in CloudWatch Logs Insights, selecting both the API Gateway and chat 
 
 ```
 fields @timestamp, log_type, http_status, status, user, document_name, sensitivity, retrieval_score, action, guardrail_action, tokens_used
-| filter request_id = "<id>" or requestId = "<id>"
+| filter request_id = "<id>"
 | sort @timestamp asc
 ```
 

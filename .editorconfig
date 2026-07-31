@@ -1,0 +1,21 @@
+# EditorConfig (https://editorconfig.org) — keeps whitespace/newline conventions consistent across
+# editors so diffs stay about content, not formatting.
+root = true
+
+[*]
+charset = utf-8
+end_of_line = lf
+insert_final_newline = true
+trim_trailing_whitespace = true
+
+[*.py]
+indent_style = space
+indent_size = 4
+
+[*.{tf,yml,yaml,json}]
+indent_style = space
+indent_size = 2
+
+[*.md]
+# Trailing double-space is meaningful in Markdown (hard line break).
+trim_trailing_whitespace = false

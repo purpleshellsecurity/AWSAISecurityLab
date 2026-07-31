@@ -5,13 +5,13 @@ activity (normal usage + the attack). Each scenario entry becomes one POST /chat
 api_access/chat/retrieval records land in CloudWatch, and the detector fires on the malicious ones.
 
 Usage:
-    ./demo/replay.py                          # replays demo/incident_scenario.json
+    ./demo/replay.py                          # replays demo/scenarios/99_incident_full.json
     ./demo/replay.py --scenario my.json       # your own scenario
     ./demo/replay.py --delay 1.0              # pace between requests (seconds)
     ./demo/replay.py --url URL --key KEY       # override the API endpoint/key
 
-URL and key default to `terraform output`. Build your own scenarios by copying incident_scenario.json
-and editing the `requests` list (any of: user, service_account, x_source_ip, session_id, prompt,
+URL and key default to `terraform output`. Build your own scenarios by copying a file in
+demo/scenarios/ and editing the `requests` list (any of: user, service_account, x_source_ip, session_id, prompt,
 simulate_tokens).
 """
 # --- Imports: standard library only, so the demo runs with no pip install -------------------------
