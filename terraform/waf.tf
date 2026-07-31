@@ -1,9 +1,21 @@
+# =============================================================================
+# waf.tf — AWS WAFv2 web ACL in front of the API Gateway stage
+# =============================================================================
 # WAF in front of API Gateway.
 # - Internal-CIDR IPSet: when controls_enabled, block any source NOT in the internal ranges
 #   (the network-layer version of the "service account from external IP" control).
 # - Rate-based rule: blunts the bulk/token-spike abuse pattern.
 # - AWS managed common rule set: baseline web protections.
+#
+# WAF is the outermost enforcement layer — it inspects requests before they ever reach API Gateway.
+# It complements, not duplicates, the API Gateway resource policy: the resource policy is IAM-style
+# IP allow/deny, while WAF adds rate-based blocking and signature-based managed rules (SQLi/XSS/etc.)
+# that IAM policies can't express. Rules are ordered by `priority` (lower = evaluated first); the
+# first rule to `block` short-circuits the request.
+# -----------------------------------------------------------------------------
 
+# An IP set holding the ranges considered "internal". Referenced by the block-non-internal rule
+# below. WAF evaluates IP sets very cheaply, so this is an efficient network gate.
 resource "aws_wafv2_ip_set" "internal" {
   name               = "${local.prefix}-internal"
   scope              = "REGIONAL"
@@ -14,15 +26,20 @@ resource "aws_wafv2_ip_set" "internal" {
   addresses = local.edge_restricted ? var.allowed_edge_cidrs : ["192.0.2.0/24"]
 }
 
+# The web ACL: the ordered set of rules WAF applies to every request hitting the associated stage.
 resource "aws_wafv2_web_acl" "this" {
   name  = "${local.prefix}-web-acl"
   scope = "REGIONAL"
 
+  # Default = allow: requests that match no blocking rule pass through. This is a positive-security
+  # posture with targeted blocks layered on top (rate + managed signatures + optional IP gate).
   default_action {
     allow {}
   }
 
-  # Block sources outside the allowed edge ranges (only when the edge is actually restricted).
+  # Rule (priority 0, evaluated first): block anything whose source IP is NOT in the internal set.
+  # Only present when the edge is restricted. This is the network-layer twin of the API Gateway
+  # resource policy — defense in depth so a single misconfig doesn't open external access.
   dynamic "rule" {
     for_each = local.edge_restricted ? [1] : []
     content {
@@ -32,6 +49,7 @@ resource "aws_wafv2_web_acl" "this" {
         block {}
       }
       statement {
+        # not_statement wraps the IP set: match = "source is NOT in internal ranges" -> block.
         not_statement {
           statement {
             ip_set_reference_statement {
@@ -41,6 +59,7 @@ resource "aws_wafv2_web_acl" "this" {
         }
       }
       visibility_config {
+        # Emit CloudWatch metrics + keep sampled requests so blocks are observable/auditable.
         cloudwatch_metrics_enabled = true
         metric_name                = "block-non-internal"
         sampled_requests_enabled   = true
@@ -48,6 +67,9 @@ resource "aws_wafv2_web_acl" "this" {
     }
   }
 
+  # Rule (priority 1): rate-based blocking. Counts requests per source IP over a rolling 5-minute
+  # window and blocks any IP exceeding the limit. This is the primary anti-abuse control for bulk
+  # scraping / token-spike attacks (LLM04 unbounded consumption) at the network edge.
   rule {
     name     = "rate-limit"
     priority = 1
@@ -56,7 +78,9 @@ resource "aws_wafv2_web_acl" "this" {
     }
     statement {
       rate_based_statement {
+        # limit = max requests per IP per 5 min before blocking (var-driven so you can tune it).
         limit              = var.rate_limit_per_5min
+        # Aggregate by source IP: each IP gets its own counter.
         aggregate_key_type = "IP"
       }
     }
@@ -67,9 +91,13 @@ resource "aws_wafv2_web_acl" "this" {
     }
   }
 
+  # Rule (priority 2): AWS's managed Common Rule Set — curated signatures for common web attacks
+  # (bad inputs, path traversal, some XSS/injection patterns). Cheap baseline hygiene you get for free.
   rule {
     name     = "aws-common"
     priority = 2
+    # override_action none{} = honor the group's own block/allow actions (vs. count-only mode used
+    # when tuning). Set to count first in real deployments to check for false positives before blocking.
     override_action {
       none {}
     }
@@ -86,6 +114,7 @@ resource "aws_wafv2_web_acl" "this" {
     }
   }
 
+  # ACL-wide visibility: aggregate metrics for the whole web ACL.
   visibility_config {
     cloudwatch_metrics_enabled = true
     metric_name                = "${local.prefix}-web-acl"
@@ -93,6 +122,8 @@ resource "aws_wafv2_web_acl" "this" {
   }
 }
 
+# Attaches the web ACL to the prod API Gateway stage. Without this association the ACL exists but
+# inspects nothing — this is the line that actually puts WAF in the request path.
 resource "aws_wafv2_web_acl_association" "this" {
   resource_arn = aws_api_gateway_stage.prod.arn
   web_acl_arn  = aws_wafv2_web_acl.this.arn
