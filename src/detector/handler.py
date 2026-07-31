@@ -52,23 +52,37 @@ def emit(metric):
 
 def alert(detection, severity, detail):
     """Record one finding three ways: (1) a structured log line for correlation/audit, (2) the custom
-    metric that drives its alarm, and (3) a human-readable SNS notification."""
+    metric that drives its alarm, and (3) a human-readable SNS notification.
+
+    The metric and SNS calls are guarded individually. This matters more than it looks: an unhandled
+    exception here fails the whole Lambda invocation, and CloudWatch Logs REDELIVERS the batch — so
+    one throttled sns.publish would re-run every detection in the batch, producing duplicate alerts
+    and re-folding requests into the token baselines. The log line (1) always lands, so a delivery
+    failure is visible without poisoning the pipeline."""
     finding = {"detection": detection, "severity": severity, **detail}
     # (1) Structured log line — searchable and joinable back to the request by request_id.
     print(json.dumps({"event": "detection", **finding}))
     # (2) Map the detection slug to its CloudWatch metric name and emit it.
-    emit({
-        "service-account-external-source": "ServiceAccountExternalSource",
-        "sensitive-retrieval-anomaly": "SensitiveRetrievalAnomaly",
-        "token-volume-deviation": "TokenSpike",
-        "indirect-injection": "IndirectInjection",
-    }[detection])
+    try:
+        emit({
+            "service-account-external-source": "ServiceAccountExternalSource",
+            "sensitive-retrieval-anomaly": "SensitiveRetrievalAnomaly",
+            "token-volume-deviation": "TokenSpike",
+            "indirect-injection": "IndirectInjection",
+        }[detection])
+    except Exception as e:  # noqa: BLE001 - CloudWatch throttle/outage must not fail the batch
+        print(json.dumps({"event": "delivery_error", "target": "cloudwatch", "detection": detection,
+                          "error": type(e).__name__}))
     # (3) Publish the full finding to SNS (subject is capped at 100 chars, the SNS limit).
-    sns.publish(
-        TopicArn=SNS_TOPIC_ARN,
-        Subject=f"[{severity}] {detection}"[:100],
-        Message=json.dumps(finding, indent=2),
-    )
+    try:
+        sns.publish(
+            TopicArn=SNS_TOPIC_ARN,
+            Subject=f"[{severity}] {detection}"[:100],
+            Message=json.dumps(finding, indent=2),
+        )
+    except Exception as e:  # noqa: BLE001 - SNS throttle/outage must not fail the batch
+        print(json.dumps({"event": "delivery_error", "target": "sns", "detection": detection,
+                          "error": type(e).__name__}))
 
 
 # --- DynamoDB baseline store (for the token-volume detection) -------------------------------------
@@ -158,12 +172,13 @@ def detection_token_deviation(rec):
         return
     if tokens > FACTOR * baseline:
         # Spike detected — flag Medium and DON'T update the baseline (see below).
+        # (No `endpoint` field here: this detection reads the chat-layer record, which doesn't carry
+        # one — only the api_access record does. request_id is the join key back to that layer.)
         alert("token-volume-deviation", "Medium", {
             "principal": principal,
             "tokens_used": tokens,
             "baseline": round(baseline, 1),
             "factor": FACTOR,
-            "endpoint": rec.get("endpoint"),
             "request_id": rec.get("request_id"),
         })
         return  # don't let the spike pollute the baseline
@@ -184,14 +199,21 @@ def lambda_handler(event, context):
             rec = json.loads(log_event["message"])
         except (json.JSONDecodeError, KeyError):
             continue
-        # Route each correlated layer record to the detection that consumes it.
+        # Route each correlated layer record to the detection that consumes it. Each detection is
+        # isolated: one record that trips a bug (or a DynamoDB throttle in the baseline path) must
+        # not fail the invocation, or CloudWatch Logs would redeliver the batch and every already-
+        # fired detection would alert again (see alert()'s docstring).
         log_type = rec.get("log_type")
-        if log_type == "api_access":
-            detection_service_account_external(rec)
-        elif log_type == "retrieval":
-            detection_sensitive_retrieval(rec)
-            detection_indirect_injection(rec)
-        elif log_type == "chat":
-            detection_token_deviation(rec)
+        try:
+            if log_type == "api_access":
+                detection_service_account_external(rec)
+            elif log_type == "retrieval":
+                detection_sensitive_retrieval(rec)
+                detection_indirect_injection(rec)
+            elif log_type == "chat":
+                detection_token_deviation(rec)
+        except Exception as e:  # noqa: BLE001 - isolate per-record failures
+            print(json.dumps({"event": "detection_error", "log_type": log_type,
+                              "request_id": rec.get("request_id"), "error": type(e).__name__}))
     # Return the count so the invocation's success/size is visible in Lambda metrics/logs.
     return {"processed": len(payload.get("logEvents", []))}

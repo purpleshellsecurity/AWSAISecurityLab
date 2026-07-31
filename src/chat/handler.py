@@ -21,12 +21,21 @@ import json        # request/response bodies and the structured (one-JSON-line) 
 import os          # read configuration from environment variables (set by Terraform)
 import re          # regex scan of retrieved documents for prompt-injection markers
 import boto3       # AWS SDK: S3 (corpus) and Bedrock (the model + guardrail)
+from botocore.config import Config  # explicit timeouts/retries instead of SDK defaults
 
 # --- AWS clients ----------------------------------------------------------------------------------
 # Created once at import time so they are reused across warm Lambda invocations (connection reuse =
 # lower latency and fewer TLS handshakes).
-s3 = boto3.client("s3")                 # reads the corpus + manifest from the S3 bucket
-bedrock = boto3.client("bedrock-runtime")  # calls the LLM (Converse API) with the guardrail attached
+# Explicit timeouts are a resilience control: the SDK's default read timeout (60s) exceeds the
+# Lambda's own 30s timeout, so a hung dependency would otherwise consume the whole invocation and
+# surface as an opaque Lambda timeout instead of a diagnosable client error.
+s3 = boto3.client("s3", config=Config(
+    connect_timeout=3, read_timeout=10, retries={"max_attempts": 2, "mode": "standard"},
+))
+bedrock = boto3.client("bedrock-runtime", config=Config(
+    # The model call is the slow leg; give it most of the budget but keep it under the Lambda cap.
+    connect_timeout=3, read_timeout=20, retries={"max_attempts": 1, "mode": "standard"},
+))
 
 # --- Configuration (injected by Terraform as environment variables) -------------------------------
 # Keeping these in the environment (not hard-coded) lets the same code run against any deployment and
@@ -166,7 +175,12 @@ def scan_for_injection(text):
 # --- Checkpoint 3 helper: model + guardrail -------------------------------------------------------
 def call_bedrock(user_message):
     """Invoke the Bedrock model via the Converse API and (when enabled) attach the Guardrail so the
-    prompt and response are screened. Returns (answer_text, tokens_used, guardrail_action)."""
+    prompt and response are screened. Returns (answer_text, tokens_used, guardrail_action, trace).
+
+    `trace` is the guardrail's assessment detail (or {} when absent). We request it on every call —
+    it's already paid for — and the handler logs it whenever the guardrail intervenes, because a
+    control you can't see firing is unverifiable: the trace is what tells a tuner WHICH policy
+    (prompt-attack filter, denied topic, PII) actually matched (see docs/tuning.md)."""
     kwargs = {
         "modelId": MODEL_ID,
         "messages": [{"role": "user", "content": [{"text": user_message}]}],
@@ -175,7 +189,7 @@ def call_bedrock(user_message):
         "inferenceConfig": {"maxTokens": 512, "temperature": 0.2},
     }
     # Only attach the guardrail when controls are on and one is configured. `trace: enabled` returns
-    # the guardrail's decision trace so we can log whether it intervened.
+    # the guardrail's decision trace so we can log exactly which policy intervened.
     if CONTROLS_ENABLED and GUARDRAIL_ID:
         kwargs["guardrailConfig"] = {
             "guardrailIdentifier": GUARDRAIL_ID,
@@ -189,7 +203,8 @@ def call_bedrock(user_message):
     # stopReason == "guardrail_intervened" means the guardrail blocked/masked content; surface it as a
     # first-class action so the detector and logs can flag the request as high-risk.
     guardrail_action = "intervened" if stop == "guardrail_intervened" else "none"
-    return text, tokens, guardrail_action
+    trace = resp.get("trace", {}).get("guardrail", {})
+    return text, tokens, guardrail_action, trace
 
 
 # --- HTTP + logging helpers -----------------------------------------------------------------------
@@ -216,6 +231,11 @@ def lambda_handler(event, context):
 
     # --- Extract request fields ----------------------------------------------------------------
     user = body.get("user", "anonymous")
+    # The API layer is fronted by the assistant's own service account, so every request is
+    # attributed to one: the caller-presented account if given, else the assistant's API account.
+    # DELIBERATE consequence (worth knowing before you deploy publicly): any unauthenticated probe
+    # of the endpoint therefore logs as the service account seen externally and fires Detection 1 —
+    # in this lab that's a feature (the deny is visible end to end), not noise to tune out.
     service_account = body.get("service_account", "") or "enso-assistant-api"
     # `principal` is who we attribute activity to: the service account if present, else the user.
     principal = body.get("service_account", "") or user
@@ -229,7 +249,17 @@ def lambda_handler(event, context):
     user_agent = event.get("requestContext", {}).get("identity", {}).get("userAgent", "ai-assistant/2.7.4")
 
     # --- Resolve the caller's clearance ---------------------------------------------------------
-    manifest = get_manifest()
+    # The manifest read is the one dependency everything downstream needs. Fail it CLOSED and
+    # VISIBLY: without this guard a transient S3 error would surface as an unhandled exception —
+    # a generic 502 from API Gateway with none of the correlation logs the whole lab is built
+    # around. A structured 503 + log line keeps even the failure path auditable.
+    try:
+        manifest = get_manifest()
+    except Exception as e:  # noqa: BLE001 - any S3/parse failure means we cannot authorize anything
+        emit({"log_type": "error", "request_id": request_id, "session_id": session_id,
+              "stage": "manifest_load", "error": type(e).__name__})
+        return respond(503, {"request_id": request_id,
+                             "error": "Corpus manifest unavailable; cannot authorize retrievals."})
     # Look up the user's max clearance; unknown users get the corpus default (fail closed to Public).
     user_clearance = manifest["users"].get(user, {}).get("max_clearance", manifest.get("default_max_clearance", "Public"))
     internal = is_internal(source_ip)
@@ -282,7 +312,18 @@ def lambda_handler(event, context):
             blocked.append({"document_name": doc["name"], "retrieval_score": score})
         else:
             # Content is read (authorized, or controls-off leak). Treat it as untrusted: scan it.
-            content = read_doc(doc["name"])
+            # A failed read is withheld and logged (fail closed) rather than crashing the request:
+            # one unreadable document shouldn't take down the whole answer, but it must be visible.
+            try:
+                content = read_doc(doc["name"])
+            except Exception as e:  # noqa: BLE001 - S3 errors on a single doc
+                emit({"log_type": "error", "request_id": request_id, "session_id": session_id,
+                      "stage": "doc_read", "document_name": doc["name"], "error": type(e).__name__})
+                retrievals.append({"document_name": doc["name"], "sensitivity": doc["classification"],
+                                   "retrieval_score": score, "action": "read_error",
+                                   "injection_in_document": False})
+                blocked.append({"document_name": doc["name"], "retrieval_score": score})
+                continue
             injection = scan_for_injection(content)
             if not authorized:
                 action = "leaked_unauthorized"   # controls off: doc leaks (the incident)
@@ -308,18 +349,30 @@ def lambda_handler(event, context):
     # --- Checkpoint 3: model + guardrail ----------------------------------------------------------
     # Assemble the final user message: the prompt plus only the authorized/clean context chunks.
     user_message = prompt + "\n\nContext:\n" + ("\n\n".join(context_chunks) if context_chunks else "(no authorized documents)")
-    guardrail_action, answer, tokens = "none", "", 0
+    guardrail_action, answer, tokens, guardrail_trace = "none", "", 0, {}
     try:
-        answer, tokens, guardrail_action = call_bedrock(user_message)
+        answer, tokens, guardrail_action, guardrail_trace = call_bedrock(user_message)
     except Exception as e:  # noqa: BLE001 - keep the lab resilient if Bedrock access isn't set up
         # Don't fail the whole request if the model is unreachable — the retrieval decisions above are
         # still the point of the demo, so surface a friendly message and keep going.
         answer = f"(model call failed: {type(e).__name__}; retrieval result still shown)"
         guardrail_action = "error"
 
+    # When the guardrail intervened, log its assessment trace: WHICH policy fired (prompt-attack
+    # filter vs. denied topic vs. PII) is the tuning signal — "it intervened" alone isn't actionable.
+    if guardrail_action == "intervened" and guardrail_trace:
+        emit({"log_type": "guardrail_trace", "request_id": request_id, "session_id": session_id,
+              "trace": guardrail_trace})
+
     # Lab affordance: let a scenario force a token count to reproduce the attacker's token burst.
+    # Parsed defensively — a malformed value is ignored rather than crashing the request after the
+    # (billable) model call already happened.
     if simulate_tokens is not None:
-        tokens = int(simulate_tokens)
+        try:
+            tokens = int(simulate_tokens)
+        except (TypeError, ValueError):
+            emit({"log_type": "error", "request_id": request_id, "session_id": session_id,
+                  "stage": "simulate_tokens", "error": "not_an_integer"})
 
     # A guardrail intervention marks the whole request high-risk; the detector uses this signal.
     high_risk_prompt = guardrail_action == "intervened"
