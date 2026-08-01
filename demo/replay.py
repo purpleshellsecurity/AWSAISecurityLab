@@ -157,7 +157,11 @@ def main():
     # Hardened deploys expose a cognito_client_id output; when present (and not --no-auth) we log
     # each scenario user in and send their JWT. Absent output or --no-auth => api-key-only (baseline).
     client_id = None if args.no_auth else (args.client_id or tf_output("cognito_client_id", required=False))
-    password = os.environ.get("DEMO_USER_PASSWORD", "LabDemo#Passw0rd!")
+    # Accept either the demo-specific var or the same TF_VAR_ the deploy used, so a single
+    # `export TF_VAR_demo_user_password=...` covers both `terraform apply` and this script.
+    password = (os.environ.get("DEMO_USER_PASSWORD")
+                or os.environ.get("TF_VAR_demo_user_password")
+                or "LabDemo#Passw0rd!")
     token_cache = {}
     if client_id:
         print(f"Auth: Cognito JWT (client {client_id}) — identity/clearance come from verified claims.\n")

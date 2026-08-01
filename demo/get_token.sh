@@ -12,11 +12,12 @@
 # custom:clearance claims the API Gateway authorizer validates and the Lambda authorizes against.
 #
 # Usage: ./demo/get_token.sh <username>   (default user: c.jones)
-# Password comes from $DEMO_USER_PASSWORD (defaults to terraform's demo_user_password default).
+# Password comes from $DEMO_USER_PASSWORD, or the same $TF_VAR_demo_user_password the deploy used,
+# else the lab default — so one `export TF_VAR_demo_user_password=...` covers apply and this script.
 set -euo pipefail
 
 USER_NAME="${1:-c.jones}"
-PASSWORD="${DEMO_USER_PASSWORD:-LabDemo#Passw0rd!}"
+PASSWORD="${DEMO_USER_PASSWORD:-${TF_VAR_demo_user_password:-LabDemo#Passw0rd!}}"
 TF_DIR="$(cd "$(dirname "$0")/../terraform" && pwd)"
 
 CLIENT_ID="$(terraform -chdir="$TF_DIR" output -raw cognito_client_id 2>/dev/null || true)"
