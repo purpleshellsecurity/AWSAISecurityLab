@@ -86,10 +86,16 @@ TOKEN=$(./demo/get_token.sh b.taylor)     # a signed OIDC token; paste it into j
 curl -s "$(terraform -chdir=terraform output -raw api_invoke_url)" \
   -H "x-api-key: $(terraform -chdir=terraform output -raw api_key_value)" \
   -H "Authorization: $TOKEN" -H 'content-type: application/json' \
-  -d '{"prompt":"show me the key rotation runbook"}'
+  -d '{"prompt":"show me the key rotation runbook","x_source_ip":"10.12.0.5"}'
 ```
 
-The seeded demo users and their clearance are in `terraform output cognito_demo_users`.
+`x_source_ip` is the lab affordance that simulates an internal source: the handler's **network
+checkpoint runs before retrieval authorization**, so a request without an internal (simulated)
+source is rejected with `Source not permitted for this principal` *before* the clearance check is
+reached. Swap `b.taylor` (Restricted) for `c.jones` (Internal) and the **same** request comes back
+with the runbook in `documents_blocked` instead of `documents_returned` — identity and clearance
+enforced entirely from the verified token, not the body. The seeded demo users and their clearance
+are in `terraform output cognito_demo_users`.
 
 ### 3. Flip the controls off, then on
 
