@@ -37,6 +37,7 @@ Two paths, and in each the point is *where* the work happens:
 
 | Control | OWASP / ATLAS | Implemented in | Mechanism |
 |---|---|---|---|
+| JWT authentication | LLM06 / AML.T0012 | `cognito.tf` + `api_gateway.tf` (authorizer) + `src/chat/handler.py` (`resolve_identity`) | Cognito issues signed JWTs; API GW `COGNITO_USER_POOLS` authorizer validates them at the edge; handler takes identity from `cognito:username` and clearance from the unforgeable `custom:clearance` claim |
 | Source-IP / network | LLM06 / AML.T0012 | `src/chat/handler.py` (`is_internal`) + `waf.tf`, `api_gateway.tf` | Lambda rejects non-internal `x_source_ip`; WAF IPSet + API GW resource policy enforce the real edge IP |
 | Retrieval authorization | LLM02 / AML.T0057 | `src/chat/handler.py` (clearance check) + `corpus/manifest.json` | `clearance_rank(user) >= clearance_rank(doc)` before content is read |
 | Content guardrail | LLM01 / AML.T0051,T0054 | `bedrock_guardrail.tf` + `handler.py` (`call_bedrock` → `guardrailConfig`) | Bedrock Guardrail: prompt-attack filter, denied topic, PII policy, attached at invoke |
@@ -47,9 +48,11 @@ Two paths, and in each the point is *where* the work happens:
 | Detections | — | `src/detector/handler.py` + `detections.tf` | 4 detections → custom metrics → alarms → SNS; rolling token baseline in DynamoDB |
 | Encryption / audit baseline | — | `kms.tf`, `logging.tf` | CMK on corpus/logs/SNS; CloudTrail; Bedrock invocation logging |
 
-The `controls_enabled` variable gates the guardrail, the retrieval-authz enforcement, and the
-edge-IP restriction. Set it false and the same requests leak (the incident); true and they're
-blocked (the fix).
+The `controls_enabled` variable gates the guardrail, the retrieval-authz enforcement, the edge-IP
+restriction, and the JWT authorizer on the API method. Set it false and the same requests leak (the
+incident) with identity self-asserted in the body; true and they're blocked (the fix) with identity
+proven by a verified token. The Cognito user pool itself exists in both modes (an IdP doesn't come
+and go) — what the toggle changes is whether the API method enforces the token.
 
 ---
 
@@ -138,6 +141,7 @@ detector emits a structured `detection` record per finding plus a custom metric 
 | LLM07 system-prompt leak | AML.T0056, T0069 | `06_system_prompt_extraction` | retrieval authz + Guardrail |
 | LLM02 RAG abuse / exfil | AML.T0057, T0055 | `03_data_exfiltration` | retrieval authz |
 | LLM06 broken access ctrl | AML.T0012, T0040 | `04_account_compromise` | network + token detection |
+| LLM06 forged identity | AML.T0012 | hardened `replay.py` / `get_token.sh` | JWT authentication (claims, not body) |
 | LLM01 indirect injection | AML.T0051.001, T0070 | `07_indirect_injection` | injection scanner + detection |
 
 Full detail in `docs/controls-matrix.md` and `docs/atlas-mapping.md`.
@@ -169,5 +173,9 @@ Full detail in `docs/controls-matrix.md` and `docs/atlas-mapping.md`.
 - **`x_source_ip` / `simulate_tokens`** are lab affordances (see §4). The WAF/resource-policy enforce
   the real edge IP; the Lambda-level `x_source_ip` check is what makes the *simulated* attacker IP
   demonstrable without external infra.
+- **JWT auth uses the resource-owner-password flow** (`USER_PASSWORD_AUTH`) so the demo can fetch
+  tokens from the CLI without a browser. A production web app would use the authorization-code flow
+  via Cognito's hosted UI (or a federated IdP); the API-side validation — the authorizer and the
+  claims-based authorization in the handler — is identical either way.
 - **Single account, local state, no CI** — it's a lab, not a reference platform. The production
   upgrade path is documented but not implemented.
