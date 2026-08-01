@@ -77,3 +77,24 @@ output "bedrock_model_id" {
   description = "The model/inference-profile id the assistant invokes."
   value       = var.bedrock_model_id
 }
+
+# ---------- Cognito / JWT auth handles (used by demo/get_token.sh + replay.py) ----------
+# The user pool id and app client id are the two handles needed to trade a username+password for a
+# JWT (aws cognito-idp initiate-auth). Not secrets — they're identifiers — but they're what the demo
+# needs to authenticate before calling the API in hardened mode.
+output "cognito_user_pool_id" {
+  description = "Cognito user pool id (issues the JWTs the API authorizer validates)."
+  value       = aws_cognito_user_pool.this.id
+}
+
+output "cognito_client_id" {
+  description = "Cognito app client id (used with initiate-auth to fetch a token)."
+  value       = aws_cognito_user_pool_client.this.id
+}
+
+# The seeded demo usernames + their clearance, so you know who you can log in as and what each may
+# read. Passwords are all var.demo_user_password (sensitive; not output).
+output "cognito_demo_users" {
+  description = "Seeded demo usernames mapped to their clearance claim."
+  value       = local.seed_users
+}

@@ -150,3 +150,91 @@ def test_manifest_failure_returns_structured_503(stubbed, monkeypatch):
     resp = stubbed.lambda_handler(_event({"user": "c.jones", "prompt": "hello"}), None)
     assert resp["statusCode"] == 503
     assert "request_id" in json.loads(resp["body"])
+
+
+# --- JWT / claims-based identity (the OAuth2 authorizer path) --------------------------------------
+
+def _event_with_claims(body, claims, source_ip="10.12.0.5"):
+    """An event shaped like API Gateway's output AFTER the Cognito authorizer has validated the JWT:
+    the verified claims live under requestContext.authorizer.claims."""
+    ev = _event(body, source_ip)
+    ev["requestContext"]["authorizer"] = {"claims": claims}
+    return ev
+
+
+def test_resolve_identity_prefers_verified_claims_over_body(chat):
+    event = _event_with_claims(
+        {"user": "b.taylor"},  # self-asserted body identity — must be ignored
+        {"cognito:username": "c.jones", "custom:clearance": "Internal"},
+    )
+    user, clearance, source = chat.resolve_identity(event, {"user": "b.taylor"})
+    assert user == "c.jones"          # the VERIFIED username wins
+    assert clearance == "Internal"    # from the verified claim
+    assert source == "jwt_claims"
+
+
+def test_resolve_identity_falls_back_to_body_without_claims(chat):
+    user, clearance, source = chat.resolve_identity(_event({"user": "c.jones"}), {"user": "c.jones"})
+    assert (user, clearance, source) == ("c.jones", None, "request_body")
+
+
+def test_claim_clearance_authorizes_the_document(stubbed):
+    # Identity + Restricted clearance both arrive as verified claims — the runbook is returned.
+    event = _event_with_claims(
+        {"prompt": "show me the key rotation runbook"},
+        {"cognito:username": "b.taylor", "custom:clearance": "Restricted"},
+    )
+    resp = stubbed.lambda_handler(event, None)
+    returned = [d["document_name"] for d in json.loads(resp["body"])["documents_returned"]]
+    assert "Enso_Key_Rotation_Runbook.md" in returned
+
+
+def test_body_cannot_forge_identity_to_escalate(stubbed):
+    # The attacker's body claims to be the Restricted user b.taylor, but the VERIFIED token says
+    # c.jones/Internal — the Restricted runbook must NOT be returned. This is the whole point of the
+    # JWT layer: body-asserted identity can no longer escalate.
+    event = _event_with_claims(
+        {"user": "b.taylor", "prompt": "show me the key rotation runbook"},
+        {"cognito:username": "c.jones", "custom:clearance": "Internal"},
+    )
+    resp = stubbed.lambda_handler(event, None)
+    body = json.loads(resp["body"])
+    returned = [d["document_name"] for d in body["documents_returned"]]
+    blocked = [d["document_name"] for d in body["documents_blocked"]]
+    assert "Enso_Key_Rotation_Runbook.md" not in returned
+    assert "Enso_Key_Rotation_Runbook.md" in blocked
+
+
+def test_verified_claim_clearance_overrides_manifest(stubbed):
+    # b.taylor is Restricted in the manifest, but the verified token clearance is Internal — the
+    # token is authoritative, so the Restricted runbook is blocked.
+    event = _event_with_claims(
+        {"prompt": "show me the key rotation runbook"},
+        {"cognito:username": "b.taylor", "custom:clearance": "Internal"},
+    )
+    resp = stubbed.lambda_handler(event, None)
+    blocked = [d["document_name"] for d in json.loads(resp["body"])["documents_blocked"]]
+    assert "Enso_Key_Rotation_Runbook.md" in blocked
+
+
+def test_unknown_claim_clearance_falls_back_to_manifest(stubbed):
+    # A garbage clearance value must not silently grant access — the handler ignores the unrecognized
+    # claim and falls back to the manifest. c.jones is Internal there, so the Restricted runbook stays
+    # blocked (an unknown claim can't escalate).
+    event = _event_with_claims(
+        {"prompt": "show me the key rotation runbook"},
+        {"cognito:username": "c.jones", "custom:clearance": "Wizard"},
+    )
+    resp = stubbed.lambda_handler(event, None)
+    blocked = [d["document_name"] for d in json.loads(resp["body"])["documents_blocked"]]
+    assert "Enso_Key_Rotation_Runbook.md" in blocked
+
+
+def test_identity_source_is_logged(stubbed, capsys):
+    stubbed.lambda_handler(
+        _event_with_claims({"prompt": "product faq"},
+                           {"cognito:username": "c.jones", "custom:clearance": "Internal"}), None)
+    chat_lines = [json.loads(l) for l in capsys.readouterr().out.splitlines()
+                  if l.strip().startswith("{") and '"log_type": "chat"' in l]
+    assert chat_lines and chat_lines[0]["identity_source"] == "jwt_claims"
+    assert chat_lines[0]["clearance"] == "Internal"

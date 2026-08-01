@@ -15,6 +15,7 @@ OWASP LLM (2025) category it addresses, the Terraform that deploys it, and the d
 | 8 | No encryption/audit baseline established in scope | Customer-managed KMS key encrypts S3 corpus, CloudWatch Logs, SNS; CloudTrail (management + Bedrock data events); Bedrock model-invocation logging to CloudWatch | — | `kms.tf`, `logging.tf` | — |
 | 9 | Service accounts use long-lived static creds | Lambda uses an IAM role (short-lived STS creds); IAM policy scoped to exactly one Bedrock model ARN + one guardrail ARN + the corpus prefix | LLM06 | `iam.tf` | n/a (inspect policy) |
 | 10 | A poisoned document in the corpus (`Enso_Vendor_Onboarding_Memo.md`) carries hidden instructions (indirect prompt injection) | **Retrieval-time injection scanner**: the chat Lambda scans retrieved content and **quarantines** any document with injection markers *before* it reaches the model | LLM01 | `src/chat/handler.py` (`scan_for_injection`) | `demo/scenarios/07_indirect_injection.json` |
+| 11 | Identity (`user`) and clearance were self-asserted in the request body — anyone could claim to be a Restricted-cleared user | **OAuth2/JWT front-door authentication**: a Cognito user pool issues signed JWTs; API Gateway's `COGNITO_USER_POOLS` authorizer validates each token at the edge; the handler derives identity from `cognito:username` and clearance from the `custom:clearance` claim (which the app client cannot write), turning retrieval-layer authz into genuine claims-based access control | LLM06 · LLM02 | `cognito.tf`, `api_gateway.tf`, `src/chat/handler.py` (`resolve_identity`) | `./demo/get_token.sh` + `demo/replay.py` (hardened) |
 
 ## Detection logic (as implemented in `src/detector/handler.py`)
 
@@ -36,10 +37,13 @@ which fires *after* documents have already been retrieved. This lab puts checkpo
 gap, in order:
 
 1. **Network** — WAF + resource policy (is the source allowed at all?)
-2. **Identity** — per-request identity, scoped IAM role (who is this, what may they do?)
-3. **Retrieval authorization** — per-document classification check (may *this caller* see *this doc*?)
-4. **Model guardrail** — prompt-attack + PII + denied topics (is the prompt/response safe?)
-5. **Detection** — the four detections (did anything slip through, and can we see it?)
+2. **Authentication** — Cognito JWT authorizer at API Gateway (is this a valid, signed token, and who does it prove the caller to be?)
+3. **Identity** — verified claims + scoped IAM role (clearance from the token, not the body)
+4. **Retrieval authorization** — per-document classification check (may *this caller* see *this doc*?)
+5. **Model guardrail** — prompt-attack + PII + denied topics (is the prompt/response safe?)
+6. **Detection** — the four detections (did anything slip through, and can we see it?)
 
 A request has to pass every layer; the documents the attacker exfiltrated would be stopped at
-layer 3, before the model is ever called.
+layer 4, before the model is ever called — and in hardened mode the attacker can no longer even
+assert a privileged identity to reach it, because layer 2 requires a signed token whose clearance
+claim they cannot mint.

@@ -26,9 +26,11 @@
 
 ## How it works
 
-A request flows Client → WAF → API Gateway → chat Lambda, which **enforces access control before any
-document is read** and applies **Bedrock's Guardrail** for content safety. Every layer logs under one
-`request_id`, and a second **detector Lambda** turns those logs into alarms.
+A request flows Client → WAF → API Gateway → chat Lambda. In hardened mode API Gateway's **Cognito
+JWT authorizer** validates a signed token at the edge, so the Lambda derives the caller's identity
+and clearance from **verified claims** (not the request body); it then **enforces access control
+before any document is read** and applies **Bedrock's Guardrail** for content safety. Every layer
+logs under one `request_id`, and a second **detector Lambda** turns those logs into alarms.
 
 ## What it defends against
 
@@ -37,6 +39,7 @@ Each attack maps to a control, a framework, and a replayable scenario (full deta
 
 | Attack | Control that stops it | OWASP · ATLAS | Scenario |
 |---|---|---|---|
+| Caller asserts a privileged identity in the request | **OAuth2/JWT auth** — Cognito authorizer; identity + clearance from verified claims, not the body | LLM06 · T0012 | hardened `replay.py` / `get_token.sh` |
 | Service account used from an external IP | network check + WAF / resource policy + detection | LLM06 · T0012 | `04_account_compromise` |
 | Under-cleared user pulls restricted docs | **authorization at the retrieval layer** | LLM02 · T0057 | `03_data_exfiltration` |
 | Prompt injection / "list all documents" | Bedrock Guardrail (prompt-attack + denied topic) | LLM01 · T0051 | `02_prompt_injection` |
@@ -73,6 +76,26 @@ terraform -chdir=terraform apply  # deploy (~cents/day); review the plan, type "
 ./demo/replay.py --scenario demo/scenarios/04_account_compromise.json   # fire an attack
 ./demo/show_detections.sh   # ~30–60s later: what the detector caught
 ```
+
+`replay.py` authenticates automatically in hardened mode: it logs each scenario user into Cognito
+and sends their JWT, so identity and clearance come from verified claims. To do it by hand and
+inspect a token:
+
+```bash
+TOKEN=$(./demo/get_token.sh b.taylor)     # a signed OIDC token; paste it into jwt.io to read the claims
+curl -s "$(terraform -chdir=terraform output -raw api_invoke_url)" \
+  -H "x-api-key: $(terraform -chdir=terraform output -raw api_key_value)" \
+  -H "Authorization: $TOKEN" -H 'content-type: application/json' \
+  -d '{"prompt":"show me the key rotation runbook","x_source_ip":"10.12.0.5"}'
+```
+
+`x_source_ip` is the lab affordance that simulates an internal source: the handler's **network
+checkpoint runs before retrieval authorization**, so a request without an internal (simulated)
+source is rejected with `Source not permitted for this principal` *before* the clearance check is
+reached. Swap `b.taylor` (Restricted) for `c.jones` (Internal) and the **same** request comes back
+with the runbook in `documents_blocked` instead of `documents_returned` — identity and clearance
+enforced entirely from the verified token, not the body. The seeded demo users and their clearance
+are in `terraform output cognito_demo_users`.
 
 ### 3. Flip the controls off, then on
 

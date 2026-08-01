@@ -201,3 +201,16 @@ variable "alarm_email" {
   type        = string
   default     = ""
 }
+
+# demo_user_password: the permanent password stamped on every seeded Cognito
+# user (cognito.tf) so the demo can fetch JWTs non-interactively. This is a
+# DEMO credential for disposable lab accounts, not a real secret — but it is a
+# credential: it lives in Terraform state, so protect the state backend, and
+# override it (TF_VAR_demo_user_password=...) rather than shipping the default.
+# Must satisfy the pool's password policy (>=12 chars, upper/lower/number/symbol).
+variable "demo_user_password" {
+  description = "Permanent password for the seeded Cognito demo users (override in production; must meet the pool password policy)."
+  type        = string
+  default     = "LabDemo#Passw0rd!"
+  sensitive   = true
+}

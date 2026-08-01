@@ -37,7 +37,7 @@ The lab addresses four of the Top 10 directly:
 |---|---|---|
 | **LLM01 Prompt Injection** | Guardrail + injection scanner + adversarial scenarios | `bedrock_guardrail.tf`, `handler.py`, `demo/scenarios/` |
 | **LLM02 Sensitive Information Disclosure** | retrieval-layer authorization (per-classification), PII guardrail policy | `handler.py` clearance check, `corpus/manifest.json`, `bedrock_guardrail.tf` |
-| **LLM06 Excessive Agency / Broken Access Control** | least-privilege IAM, network/source-IP enforcement, per-request identity | `iam.tf`, `waf.tf`, `api_gateway.tf`, `handler.py` |
+| **LLM06 Excessive Agency / Broken Access Control** | OAuth2/JWT authentication (Cognito authorizer; identity + clearance from verified claims, not the body), least-privilege IAM, network/source-IP enforcement | `cognito.tf`, `api_gateway.tf`, `iam.tf`, `waf.tf`, `handler.py` |
 | **LLM07 System Prompt Leakage** | secrets in Secrets Manager (not in corpus/prompt), system-prompt doc gated by authorization | `secrets.tf`, `corpus/`, `handler.py` |
 
 Not in scope for this lab (no training pipeline, no agent tools, no plugins): LLM03 Supply Chain,
