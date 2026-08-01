@@ -177,7 +177,7 @@ def main():
 
     print(f"Replaying {len(requests)} requests against {url}\n")
     # Running tallies for the end-of-run summary.
-    fired = blocked_net = blocked_doc = guardrail = 0
+    fired = blocked_net = blocked_doc = guardrail = jwt_unauth = 0
     for i, entry in enumerate(requests, 1):
         # Build the request body from only the passthrough keys present in this entry.
         body = {k: entry[k] for k in PASSTHROUGH if k in entry}
@@ -188,9 +188,13 @@ def main():
         fired += 1
         phase = entry.get("phase", "")          # human-readable label for this step (attack phase)
         rid = resp.get("request_id", "?")       # correlation id to look the request up in the logs
-        # A 401 from the JWT authorizer: no/invalid token reached the hardened front door.
+        # A 401 from the JWT authorizer: no/invalid token reached the hardened front door. Expected
+        # for the service-account machine-path entries (no Cognito user -> no token) — the edge
+        # rejects them before the Lambda runs, which in hardened mode is the correct, stronger result.
         if status == 401:
-            print(f"[{i:>2}] {phase:<22} {body.get('user',''):<10} -> 401 jwt-unauthenticated  rid={rid}")
+            jwt_unauth += 1
+            who = body.get("user") or body.get("service_account", "")
+            print(f"[{i:>2}] {phase:<22} {who:<12} -> 401 jwt-unauthenticated (no valid token)  rid={rid}")
             continue
         # Checkpoint-1 network block returns 403 before any retrieval — record and move on.
         if status == 403:
@@ -218,9 +222,16 @@ def main():
 
     # --- Summary + next steps ------------------------------------------------------------------
     print(
-        f"\nDone. {fired} requests | {blocked_net} network-blocked | "
+        f"\nDone. {fired} requests | {jwt_unauth} jwt-rejected | {blocked_net} network-blocked | "
         f"{blocked_doc} blocked-at-retrieval | {guardrail} guardrail-intervened."
     )
+    if jwt_unauth:
+        print(
+            f"Note: {jwt_unauth} request(s) were rejected at the JWT front door — the service-account "
+            "machine-path entries have no Cognito user, so the hardened authorizer 401s them before\n"
+            "      the Lambda runs. To exercise the service-account/token detections instead, deploy the\n"
+            "      baseline (apply -var=controls_enabled=false) and run: ./demo/replay.py --no-auth"
+        )
     print("Give the log subscription ~30-60s, then: ./demo/show_detections.sh   (or ./demo/trace.sh <body>)")
 
 
