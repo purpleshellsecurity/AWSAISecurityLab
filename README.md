@@ -26,9 +26,14 @@
 
 ## How it works
 
-A request flows Client → WAF → API Gateway → chat Lambda, which **enforces access control before any
-document is read** and applies **Bedrock's Guardrail** for content safety. Every layer logs under one
-`request_id`, and a second **detector Lambda** turns those logs into alarms.
+**Client → WAF → API Gateway → chat Lambda → Bedrock**, every layer logged under one `request_id`.
+
+In hardened mode:
+
+- API Gateway's **Cognito JWT authorizer** validates a signed token at the edge.
+- The Lambda derives identity and clearance from **verified claims**, not the request body.
+- It **enforces access control before any document is read**, then applies a **Bedrock Guardrail** for content safety.
+- A second **detector Lambda** turns the logs into alarms.
 
 ## What it defends against
 
@@ -37,6 +42,7 @@ Each attack maps to a control, a framework, and a replayable scenario (full deta
 
 | Attack | Control that stops it | OWASP · ATLAS | Scenario |
 |---|---|---|---|
+| Caller asserts a privileged identity in the request | **OAuth2/JWT auth** — Cognito authorizer; identity + clearance from verified claims, not the body | LLM06 · T0012 | hardened `replay.py` / `get_token.sh` |
 | Service account used from an external IP | network check + WAF / resource policy + detection | LLM06 · T0012 | `04_account_compromise` |
 | Under-cleared user pulls restricted docs | **authorization at the retrieval layer** | LLM02 · T0057 | `03_data_exfiltration` |
 | Prompt injection / "list all documents" | Bedrock Guardrail (prompt-attack + denied topic) | LLM01 · T0051 | `02_prompt_injection` |
@@ -55,7 +61,9 @@ Each attack maps to a control, a framework, and a replayable scenario (full deta
 - **Bedrock access** — Anthropic models need a one-time use-case form; `./scripts/preflight.sh` tells you where to click
 - Default region **`us-east-1`**
 
-*Runs at a few cents/day and is fully reversible.*
+*Usage costs a few cents/day, and everything is torn down by one `destroy`. Note the always-on
+baseline: the WAF web ACL, KMS key, and CloudTrail Bedrock data events bill roughly **$10–15/month
+even at zero traffic** — destroy the lab when you're not using it.*
 
 ### 1. Deploy
 
@@ -71,6 +79,25 @@ terraform -chdir=terraform apply  # deploy (~cents/day); review the plan, type "
 ./demo/replay.py --scenario demo/scenarios/04_account_compromise.json   # fire an attack
 ./demo/show_detections.sh   # ~30–60s later: what the detector caught
 ```
+
+In hardened mode `replay.py` authenticates automatically — it logs each scenario user into Cognito
+and sends their JWT. To do it by hand and inspect a token:
+
+```bash
+TOKEN=$(./demo/get_token.sh b.taylor)     # a signed OIDC token; paste it into jwt.io to read the claims
+curl -s "$(terraform -chdir=terraform output -raw api_invoke_url)" \
+  -H "x-api-key: $(terraform -chdir=terraform output -raw api_key_value)" \
+  -H "Authorization: $TOKEN" -H 'content-type: application/json' \
+  -d '{"prompt":"show me the key rotation runbook","x_source_ip":"10.12.0.5"}'
+```
+
+`x_source_ip` simulates an internal source. The handler's **network checkpoint runs before
+retrieval authorization**, so a request without an internal (simulated) source is rejected with
+`Source not permitted for this principal` *before* the clearance check is reached.
+
+Swap `b.taylor` (Restricted) for `c.jones` (Internal) and the **same** request returns the runbook
+in `documents_blocked` instead of `documents_returned` — identity and clearance enforced entirely
+from the verified token, not the body. List the seeded users with `terraform output cognito_demo_users`.
 
 ### 3. Flip the controls off, then on
 
@@ -96,6 +123,12 @@ Write your own by copying a file in [`demo/scenarios/`](demo/scenarios/README.md
 ```bash
 terraform -chdir=terraform destroy   # stops the cost
 ```
+
+> **Shared-account caveat:** the lab manages two per-account/per-region singletons — the API Gateway
+> CloudWatch-logging role and the Bedrock model-invocation logging config. In a **dedicated lab
+> account** (recommended) this is a non-issue; in a shared account, `destroy` resets both, which
+> disables API Gateway access logging and Bedrock invocation logging for everything else in that
+> account/region. Note the pre-existing settings before deploying so you can restore them.
 
 ---
 
