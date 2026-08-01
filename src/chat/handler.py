@@ -219,6 +219,35 @@ def emit(record):
     print(json.dumps(record))
 
 
+# --- Identity resolution (JWT claims vs. lab affordance) -------------------------------------------
+def resolve_identity(event, body):
+    """Resolve WHO the caller is and WHAT clearance they hold. Returns (user, clearance, source).
+
+    PRODUCTION / HARDENED PATH — verified JWT claims.
+      When the API method uses the Cognito authorizer (controls_enabled), API Gateway has already
+      validated the Bearer token's signature (against the pool's JWKS), expiry, and audience BEFORE
+      this code runs, and hands the verified claims to us at
+      event.requestContext.authorizer.claims. We take identity from `cognito:username` and clearance
+      from the `custom:clearance` claim — NEVER from the request body. Because the app client cannot
+      write custom:clearance (see cognito.tf write_attributes), a signed-in user cannot forge either
+      value: this is what makes the retrieval-layer authorization genuine claims-based access control
+      rather than an honor system.
+
+    LAB / BASELINE PATH — self-asserted body fields.
+      With controls disabled the method is authorization="NONE", there are no claims, and the demo
+      falls back to the body's `user` field (clearance then looked up from the manifest). This is the
+      intentionally-vulnerable behavior the lab reproduces: anyone can claim to be anyone. `source`
+      is logged so every request shows whether its identity was proven or merely asserted.
+    """
+    claims = (event.get("requestContext", {}).get("authorizer") or {}).get("claims")
+    if claims:
+        user = claims.get("cognito:username") or claims.get("username") or claims.get("sub") or "anonymous"
+        # custom:clearance may be absent (a user seeded without it) -> None signals manifest fallback.
+        clearance = claims.get("custom:clearance") or None
+        return user, clearance, "jwt_claims"
+    return body.get("user", "anonymous"), None, "request_body"
+
+
 # --- Entry point ----------------------------------------------------------------------------------
 def lambda_handler(event, context):
     # request_id ties every log line (api_access / chat / retrieval) for this invocation together.
@@ -230,15 +259,23 @@ def lambda_handler(event, context):
         body = {}
 
     # --- Extract request fields ----------------------------------------------------------------
-    user = body.get("user", "anonymous")
-    # The API layer is fronted by the assistant's own service account, so every request is
-    # attributed to one: the caller-presented account if given, else the assistant's API account.
-    # DELIBERATE consequence (worth knowing before you deploy publicly): any unauthenticated probe
-    # of the endpoint therefore logs as the service account seen externally and fires Detection 1 —
-    # in this lab that's a feature (the deny is visible end to end), not noise to tune out.
-    service_account = body.get("service_account", "") or "enso-assistant-api"
-    # `principal` is who we attribute activity to: the service account if present, else the user.
-    principal = body.get("service_account", "") or user
+    # Identity is resolved FIRST and from the strongest available source: verified JWT claims in
+    # hardened mode, the self-asserted body field only in the controls-off baseline (see
+    # resolve_identity). `identity_source` is carried into the logs so provenance is auditable.
+    user, claim_clearance, identity_source = resolve_identity(event, body)
+    if identity_source == "jwt_claims":
+        # A human authenticated by JWT is not a service account; attribute activity to the verified
+        # user and do not let a body-supplied service_account field re-label the principal.
+        service_account = ""
+        principal = user
+    else:
+        # Baseline machine path: the API layer is fronted by the assistant's own service account, so
+        # every request is attributed to one. DELIBERATE consequence (worth knowing before you deploy
+        # the baseline publicly): any unauthenticated probe logs as the service account seen
+        # externally and fires Detection 1 — in this lab that's a feature (the deny is visible end to
+        # end), not noise to tune out.
+        service_account = body.get("service_account", "") or "enso-assistant-api"
+        principal = body.get("service_account", "") or user
     prompt = body.get("prompt", "")
     session_id = body.get("session_id", "")
     # Lab affordances (see README): simulate the attacker source IP / token burst.
@@ -260,8 +297,16 @@ def lambda_handler(event, context):
               "stage": "manifest_load", "error": type(e).__name__})
         return respond(503, {"request_id": request_id,
                              "error": "Corpus manifest unavailable; cannot authorize retrievals."})
-    # Look up the user's max clearance; unknown users get the corpus default (fail closed to Public).
-    user_clearance = manifest["users"].get(user, {}).get("max_clearance", manifest.get("default_max_clearance", "Public"))
+    # Resolve the caller's clearance. Precedence: a VERIFIED custom:clearance claim wins (hardened
+    # path — clearance travels in the signed token and can't be self-set); otherwise fall back to the
+    # manifest's per-user table keyed by the (verified or asserted) username; unknown users get the
+    # corpus default (fail closed to Public). An unrecognized claim value also falls back rather than
+    # silently granting nothing.
+    manifest_clearance = manifest["users"].get(user, {}).get("max_clearance", manifest.get("default_max_clearance", "Public"))
+    if claim_clearance and claim_clearance in CLASS_ORDER:
+        user_clearance = claim_clearance
+    else:
+        user_clearance = manifest_clearance
     internal = is_internal(source_ip)
 
     # --- Per-layer log emitters (closures capture the shared request/session context) ----------
@@ -275,11 +320,14 @@ def lambda_handler(event, context):
         })
 
     def chat_log(tokens, risk_label, guardrail_action, blocked, reason=""):
-        # Layer 2: the chat/LLM layer (mirrors chat_logs.json).
+        # Layer 2: the chat/LLM layer (mirrors chat_logs.json). identity_source records whether the
+        # caller's identity/clearance was proven (jwt_claims) or self-asserted (request_body) — the
+        # provenance signal that distinguishes a hardened request from the vulnerable baseline.
         emit({
             "log_type": "chat", "request_id": request_id, "session_id": session_id,
             "user": user, "principal": principal, "source_ip": source_ip, "internal_source": internal,
             "service_account": service_account, "prompt": prompt, "risk_label": risk_label,
+            "identity_source": identity_source, "clearance": user_clearance,
             "guardrail_action": guardrail_action, "guardrail_blocked": blocked, "reason": reason,
             "tokens_used": tokens,
         })

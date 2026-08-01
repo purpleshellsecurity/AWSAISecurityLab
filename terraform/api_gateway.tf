@@ -81,17 +81,36 @@ resource "aws_api_gateway_resource" "chat" {
   path_part   = "chat"
 }
 
-# POST /chat method definition. This is where the API-key requirement is declared.
+# Cognito JWT authorizer (hardened mode only). This is the front-door AUTHENTICATION control: API
+# Gateway validates the incoming Bearer token's signature against the pool's JWKS and its expiry/
+# audience BEFORE the request reaches the Lambda, then passes the verified claims through to the
+# handler at event.requestContext.authorizer.claims. count is gated on controls_enabled so the
+# vulnerable baseline keeps authorization = "NONE" and the self-asserted-identity attack still
+# replays (see the method below).
+resource "aws_api_gateway_authorizer" "cognito" {
+  count         = var.controls_enabled ? 1 : 0
+  name          = "${local.prefix}-cognito"
+  rest_api_id   = aws_api_gateway_rest_api.this.id
+  type          = "COGNITO_USER_POOLS"
+  provider_arns = [aws_cognito_user_pool.this.arn]
+  # The token is read from the standard Authorization header (Bearer <JWT>).
+  identity_source = "method.request.header.Authorization"
+}
+
+# POST /chat method definition — where authentication is declared.
 resource "aws_api_gateway_method" "chat_post" {
   rest_api_id = aws_api_gateway_rest_api.this.id
   resource_id = aws_api_gateway_resource.chat.id
   http_method = "POST"
-  # authorization = NONE: no IAM/Cognito/custom authorizer in this lab — auth is by API key only.
-  # In production an API key is an identifier/throttling handle, not a strong authenticator; it
-  # would typically be paired with a JWT/IAM authorizer. The lab keeps it simple on purpose.
-  authorization = "NONE"
+  # Hardened: COGNITO_USER_POOLS — the request must carry a valid pool-issued JWT, verified at the
+  # edge, and the handler derives identity/clearance from the resulting claims. Baseline: "NONE" —
+  # no token required, and the handler falls back to the self-asserted body fields (the original
+  # vulnerable behavior the lab reproduces). The API key is STILL required in both modes: it is the
+  # throttling/quota handle (usage plan below), a separate concern from authenticating the user.
+  authorization = var.controls_enabled ? "COGNITO_USER_POOLS" : "NONE"
+  authorizer_id = var.controls_enabled ? aws_api_gateway_authorizer.cognito[0].id : null
   # Require a valid API key on every call. Combined with the usage plan below this gives per-caller
-  # identity and rate limiting, and populates $context.identity.apiKeyId in the access log.
+  # throttling, and populates $context.identity.apiKeyId in the access log.
   api_key_required = true
 }
 
@@ -117,7 +136,10 @@ resource "aws_api_gateway_deployment" "this" {
       aws_api_gateway_resource.chat.id,
       aws_api_gateway_method.chat_post.id,
       aws_api_gateway_integration.chat.id,
-      var.controls_enabled, # the toggle that changes the resource policy
+      var.controls_enabled, # the toggle that changes the resource policy AND the method authorizer
+      # The authorizer id (present only in hardened mode) so flipping controls redeploys the method
+      # with the JWT authorizer attached/detached, not just the resource policy.
+      join(",", [for a in aws_api_gateway_authorizer.cognito : a.id]),
       join(",", var.allowed_edge_cidrs),
     ]))
   }
