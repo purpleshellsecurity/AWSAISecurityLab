@@ -6,18 +6,19 @@ All notable changes to this project are documented here. Format follows
 ## [Unreleased]
 
 ### Added
-- **OAuth2 / JWT authentication (Amazon Cognito).** A Cognito user pool (`cognito.tf`) issues signed
-  JWTs; API Gateway's `COGNITO_USER_POOLS` authorizer validates them at the edge (hardened mode);
-  the chat handler's new `resolve_identity` takes the caller's identity from the verified
-  `cognito:username` claim and clearance from a `custom:clearance` claim the app client cannot write
-  — so identity and clearance can no longer be self-asserted in the request body. This closes the
-  lab's one acknowledged weakness (self-asserted identity) and turns the retrieval-layer check into
-  genuine claims-based access control. Seeded demo users mirror the corpus manifest; `demo/replay.py`
-  logs them in automatically and `demo/get_token.sh` fetches a token by hand for inspection. New
-  tests cover claim precedence over the body, the anti-escalation guarantee, and unknown-claim
-  fallback. The `controls_enabled` toggle gates whether the API method enforces the token, so the
-  vulnerable baseline (self-asserted identity) still replays. Docs: controls-matrix row 11,
-  owasp-mapping LLM06, TUTORIAL §3/§7/§9.
+- **OAuth2 / JWT authentication (Amazon Cognito).** Identity and clearance can no longer be
+  self-asserted in the request body — this closes the lab's one acknowledged weakness and turns the
+  retrieval-layer check into genuine claims-based access control.
+  - A Cognito user pool (`cognito.tf`) issues signed JWTs; API Gateway's `COGNITO_USER_POOLS`
+    authorizer validates them at the edge (hardened mode).
+  - The chat handler's new `resolve_identity` takes identity from the verified `cognito:username`
+    claim and clearance from a `custom:clearance` claim the app client cannot write.
+  - Seeded demo users mirror the corpus manifest; `demo/replay.py` logs them in automatically, and
+    `demo/get_token.sh` fetches a token by hand for inspection.
+  - The `controls_enabled` toggle gates whether the API method enforces the token, so the vulnerable
+    baseline (self-asserted identity) still replays.
+  - New tests cover claim precedence over the body, the anti-escalation guarantee, and unknown-claim
+    fallback. Docs: controls-matrix row 11, owasp-mapping LLM06, TUTORIAL §3/§7/§9.
 - Unit tests (`tests/`, 43 cases) for both Lambdas — clearance lattice, network checkpoint,
   retrieval scoring, the injection scanner (verified against the real corpus), all four detections,
   the EWMA baseline math, and batch/delivery failure isolation — wired into CI as a `pytest` job.
