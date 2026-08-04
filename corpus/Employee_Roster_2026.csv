@@ -1,11 +1,22 @@
 # Classification: Restricted — Department: HR
-# ILLUSTRATIVE / SYNTHETIC PII: every name, address, email, and figure below is
-# fabricated for the AICompliance data-classification exercise. No real person is
-# represented. Not in the lab corpus. This is the "genuine PII" contrast to the
-# Benefits FAQ (which, despite being an HR doc, contains no personal data).
-employee_id,full_name,home_address,personal_email,date_of_birth,base_comp_usd
-E1001,Jordan Avery,"12 Example St, Springfield, EX 00000",jordan.avery@example.com,1990-04-11,142000
-E1002,Riley Chen,"88 Sample Ave, Rivertown, EX 00000",riley.chen@example.com,1985-11-02,131500
-E1003,Sam Okafor,"5 Placeholder Rd, Lakeview, EX 00000",sam.okafor@example.com,1993-07-23,158200
-E1004,Morgan Diaz,"41 Fictional Blvd, Elmwood, EX 00000",morgan.diaz@example.com,1988-01-30,127900
-E1005,Casey Nguyen,"9 Nonexistent Ln, Fairview, EX 00000",casey.nguyen@example.com,1996-09-15,118400
+# Fabricated data for the AICompliance data-classification lab. No row represents a real person;
+# names, addresses, emails, phone numbers, DOBs, and compensation are synthetic. Cities/states/ZIPs
+# are real geographic values only. This is the "genuine-PII shape" contrast to the Benefits FAQ,
+# which is an HR document that carries no personal data.
+employee_id,full_name,title,department,manager_id,home_address,personal_email,work_email,phone,date_of_birth,hire_date,base_comp_usd
+E1001,Jordan Avery,VP Engineering,Engineering,,"418 Larkspur Ln, Portland, OR 97214",jordan.avery.pdx@gmail.com,javery@enso.com,+1-503-555-0142,1979-04-11,2019-02-04,238000
+E1002,Riley Chen,Staff Software Engineer,Engineering,E1001,"1620 W Belmont Ave Apt 3B, Chicago, IL 60657",rileychen88@gmail.com,rchen@enso.com,+1-312-555-0188,1985-11-02,2020-06-15,201500
+E1003,Sam Okafor,Senior Data Scientist,Engineering,E1001,"92 Beacon St Unit 5, Boston, MA 02108",s.okafor@outlook.com,sokafor@enso.com,+1-617-555-0117,1990-07-23,2021-01-11,178200
+E1004,Morgan Diaz,Engineering Manager,Engineering,E1001,"7411 Cesar Chavez St, Austin, TX 78702",morgan.diaz.atx@gmail.com,mdiaz@enso.com,+1-512-555-0163,1983-01-30,2019-09-23,196400
+E1005,Casey Nguyen,Software Engineer II,Engineering,E1004,"305 NE 45th St, Seattle, WA 98105",casey.nguyen96@gmail.com,cnguyen@enso.com,+1-206-555-0179,1996-09-15,2022-08-01,148900
+E1006,Dana Whitfield,Chief Financial Officer,Finance,,"66 Gramercy Park E, New York, NY 10003",dwhitfield@protonmail.com,dwhitfield@enso.com,+1-212-555-0104,1974-03-18,2018-05-14,312000
+E1007,Priya Raman,Controller,Finance,E1006,"2140 Sacramento St, San Francisco, CA 94115",priya.raman@icloud.com,praman@enso.com,+1-415-555-0155,1987-12-06,2020-11-02,167300
+E1008,Marcus Bell,Financial Analyst,Finance,E1007,"889 Peachtree St NE Apt 12, Atlanta, GA 30309",marcusbell.atl@gmail.com,mbell@enso.com,+1-404-555-0193,1994-05-27,2023-03-13,112500
+E1009,Alicia Fournier,VP People,HR,,"512 Highland Ave, Somerville, MA 02144",aliciaf.hr@gmail.com,afournier@enso.com,+1-617-555-0136,1981-08-09,2019-04-01,204800
+E1010,Trevor Osei,HR Business Partner,HR,E1009,"1330 Lamar St Apt 704, Houston, TX 77007",trevor.osei@yahoo.com,tosei@enso.com,+1-713-555-0128,1989-02-14,2021-07-19,124600
+E1011,Bianca Sokolov,Recruiter,HR,E1009,"455 SW Yamhill St, Portland, OR 97204",bsokolov.recruit@gmail.com,bsokolov@enso.com,+1-503-555-0171,1993-10-03,2022-02-28,98700
+E1012,Owen Fitzgerald,General Counsel,Legal,,"3009 P St NW, Washington, DC 20007",owen.fitzgerald@protonmail.com,ofitzgerald@enso.com,+1-202-555-0149,1976-06-21,2018-10-08,289500
+E1013,Naomi Weiss,Product Manager,Product,,"1875 Curtis St Apt 9, Denver, CO 80202",naomi.weiss@gmail.com,nweiss@enso.com,+1-303-555-0182,1988-11-19,2020-02-24,161900
+E1014,Hassan Al-Amin,Account Executive,Sales,,"640 N Michigan Ave, Chicago, IL 60611",hassan.alamin@gmail.com,halamin@enso.com,+1-312-555-0107,1991-03-08,2021-05-17,134000
+E1015,Grace Lindqvist,Customer Success Lead,Support,,"221 Church St, Nashville, TN 37201",grace.lindqvist@icloud.com,glindqvist@enso.com,+1-615-555-0166,1990-12-30,2020-09-14,127800
+E1016,Devon Pratt,Support Engineer,Support,E1015,"77 Jackson St, Denver, CO 80206",devonpratt.co@gmail.com,dpratt@enso.com,+1-303-555-0195,1997-07-05,2023-06-05,96400
