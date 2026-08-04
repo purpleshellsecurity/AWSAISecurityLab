@@ -7,7 +7,10 @@
     { "name": "Enso_Benefits_FAQ_2026.md", "classification": "Confidential", "department": "hr" },
     { "name": "Enso_Vendor_Onboarding_Memo.md", "classification": "Internal", "department": "procurement", "role": "poisoned", "technique": "ATLAS AML.T0051.001 (indirect prompt injection / RAG poisoning)" },
     { "name": "Enso_Key_Rotation_Runbook.md", "classification": "Restricted", "department": "platform" },
-    { "name": "Enso_Assistant_System_Prompt.txt", "classification": "Restricted", "department": "platform" }
+    { "name": "Enso_Assistant_System_Prompt.txt", "classification": "Restricted", "department": "platform" },
+    { "name": "Enso_Ranking_Algorithm_Design.md", "classification": "Confidential", "department": "engineering" },
+    { "name": "Employee_Roster_2026.csv", "classification": "Restricted", "department": "hr" },
+    { "name": "Draft_Q3_Financials.md", "classification": "Restricted", "department": "finance" }
   ],
   "users": {
     "c.jones": { "department": "support", "max_clearance": "Internal" },

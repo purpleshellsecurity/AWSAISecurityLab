@@ -1,0 +1,11 @@
+# Classification: Restricted — Department: HR
+# ILLUSTRATIVE / SYNTHETIC PII: every name, address, email, and figure below is
+# fabricated for the AICompliance data-classification exercise. No real person is
+# represented. Not in the lab corpus. This is the "genuine PII" contrast to the
+# Benefits FAQ (which, despite being an HR doc, contains no personal data).
+employee_id,full_name,home_address,personal_email,date_of_birth,base_comp_usd
+E1001,Jordan Avery,"12 Example St, Springfield, EX 00000",jordan.avery@example.com,1990-04-11,142000
+E1002,Riley Chen,"88 Sample Ave, Rivertown, EX 00000",riley.chen@example.com,1985-11-02,131500
+E1003,Sam Okafor,"5 Placeholder Rd, Lakeview, EX 00000",sam.okafor@example.com,1993-07-23,158200
+E1004,Morgan Diaz,"41 Fictional Blvd, Elmwood, EX 00000",morgan.diaz@example.com,1988-01-30,127900
+E1005,Casey Nguyen,"9 Nonexistent Ln, Fairview, EX 00000",casey.nguyen@example.com,1996-09-15,118400
