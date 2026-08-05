@@ -3,8 +3,7 @@
 For each security control: what attack it stops, and which rules and frameworks it lines
 up with. Control numbers match `docs/controls-matrix.md`.
 
-
-> [!NOTE]  
+> Where each column comes from:
 > - **OWASP + ATLAS**: already mapped in the lab (`docs/owasp-mapping.md`, `docs/atlas-mapping.md`). Real.
 > - **NIST + EU**: reasoned and checked against the published frameworks. Defensible.
 > - **ISO 42001**: not assessed (needs the licensed standard). Out of scope. See the note below.
@@ -15,6 +14,7 @@ up with. Control numbers match `docs/controls-matrix.md`.
 > lab that is expected; stated so it is not a surprise.
 >
 > Fake data. Not a certified system. Not legal advice.
+
 ---
 
 ## EU AI Act tier
@@ -73,22 +73,38 @@ Cross-cutting controls (logging, encryption) do not map to one OWASP risk, so "n
 function. But the lab also does real MAP (classification, the control inventory) and real
 MEASURE (the controls-on/off A/B is MEASURE 2.7; logging plus detections is MEASURE 3.1).
 The function it does least is GOVERN. Those gaps are tracked in `governance.md`.
+
 ---
 
-## What's closed, what's open
+## ISO 42001: deliberately out of scope
 
-Four GOVERN gaps from the earlier draft are now closed:
+ISO/IEC 42001 is a certifiable AI management-system standard. It is not mapped here, and
+that is a deliberate call, not an omission. Two reasons:
 
-| Closed gap | How | Where |
-|---|---|---|
-| User-facing "this is an AI" notice (Art. 50) | Disclosure on every answer | `handler.py` `AI_NOTICE` |
-| Written AI policy (GOVERN 1.2) | One-page lab policy | `docs/compliance/ai-policy.md` |
-| Oversight playbook (GOVERN 2.1) | Alert-response runbook | `docs/compliance/incident-response.md` |
-| Incident-reporting process (GOVERN 4.3) | Reporting steps + timeline | `docs/compliance/incident-response.md` |
+- **A credible mapping needs the licensed text.** The standard is paywalled. Mapping
+  controls against a blog-summarized version would produce claims we cannot stand behind.
+  An unverified compliance column is a liability, not evidence.
+- **Certification is an audit outcome, not a self-declaration.** ISO 42001 conformity is
+  attested by an accredited auditor against a real management system with real operating
+  records. A lab on fake data cannot honestly claim it.
 
-Three stay open by design. They need real engineering or a real operating org, and faking
-them is worse than tracking them: AI impact assessment (MAP 5.1), answer-accuracy
-evaluation (MEASURE 2.3), team-based RBAC (MANAGE 1.3). Owners and status are in
-`docs/compliance/governance.md`.
+What the lab can say is narrower and true: it implements the technical substance of several
+things ISO 42001 expects (data governance, access control, testing, logging). Bringing the
+standard into scope would mean obtaining the licensed text, mapping each Annex A control,
+and running an audit. Until then, out of scope is the honest label.
 
-A maintained gap list makes the whole thing more trustworthy, not less.
+---
+
+## What's still open
+
+Three governance gaps stay open by design. They need real engineering or a real operating
+org, and faking them is worse than tracking them:
+
+- **AI impact assessment (MAP 5.1):** needs a real view of who could be harmed. A security
+  risk register is not the same artifact.
+- **Answer-accuracy evaluation (MEASURE 2.3):** needs a ground-truth test set. We test that
+  the system is safe, not that it is right.
+- **Team-based RBAC (MANAGE 1.3):** needs a change to the permission model, not a doc.
+
+Owners, targets, and status are in `docs/compliance/governance.md`. A maintained gap list
+makes the whole thing more trustworthy, not less.

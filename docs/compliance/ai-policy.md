@@ -1,9 +1,8 @@
-# AI Use Policy: Enso Assistant (lab example)
+# AI Use Policy: Enso Assistant
 
-> **Lab example, clearly labeled.** A one-page policy to show what a GOVERN-level AI
-> policy looks like for a limited-risk internal assistant. No real organization has
-> adopted it. Roles are titles, not people. Have Legal/Compliance review it before it
-> governs anything real. Closes remediation gap GOVERN 1.2 / EU AI Act Art. 17.
+A one-page AI use policy for a limited-risk internal assistant. Have Legal/Compliance
+review it before it governs anything real. Closes remediation gap GOVERN 1.2 / EU AI Act
+Art. 17.
 
 ## 1. Purpose & scope
 
@@ -69,4 +68,4 @@ integrations materially change.
 
 ---
 
-*Owner: CISO. Cadence: annual and on material change. Status: lab example, not adopted.*
+*Owner: CISO. Cadence: annual and on material change.*

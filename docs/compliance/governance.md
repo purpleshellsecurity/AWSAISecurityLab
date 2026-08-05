@@ -5,10 +5,6 @@ are the right ones, and what is still open. Three questions: **Governance** (who
 accountable), **Risk** (what could go wrong and what we decided), **Compliance** (which
 rules apply and how we prove it).
 
-> **Lab example, not a live program.** Fake data, not audited. Owners are roles, not
-> people. This shows the *shape* of an AI GRC program. It is not itself a governing
-> instrument, and no certification is claimed.
-
 Framework spine: NIST AI RMF (Govern / Map / Measure / Manage) plus the EU AI Act
 (limited-risk tier). See [`compliance-framework-mapping.md`](compliance-framework-mapping.md).
 

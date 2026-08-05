@@ -1,10 +1,8 @@
-# Oversight & Incident Response (lab example)
+# Oversight & Incident Response
 
-> **Lab example, clearly labeled.** The two GOVERN-level operational artifacts a real
-> program needs: an alert-response playbook (who acts on each detection, with what
-> authority) and an incident-reporting process (what counts, who's told, on what clock).
-> Roles are titles, not people. Not a live runbook. Closes gaps GOVERN 2.1 (oversight)
-> and GOVERN 4.3 (incident reporting).
+Two operational artifacts: an alert-response playbook (who acts on each detection, with
+what authority) and an incident-reporting process (what counts, who's told, on what clock).
+Closes gaps GOVERN 2.1 (oversight) and GOVERN 4.3 (incident reporting).
 
 The lab already emits the signals. What was missing was the human side: who does what when
 an alarm fires.
@@ -76,4 +74,4 @@ is not an incident. That is the controls working. Log it, do not escalate it.
 ---
 
 *Owner: Security Engineering (playbook), CISO (declaration authority). Reviewed after every
-incident and each quarterly cycle. Status: lab example, not a live runbook.*
+incident and each quarterly cycle.*
