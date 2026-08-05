@@ -137,6 +137,7 @@ terraform -chdir=terraform destroy   # stops the cost
 - **Understand** — [overview](docs/overview.md) · [architecture](docs/architecture.md) · [tutorial](TUTORIAL.md)
 - **Operate** — [testing runbook](TESTING.md) · [tuning & lessons](docs/tuning.md) · [attack scenarios](demo/scenarios/README.md)
 - **Frameworks** — [controls matrix](docs/controls-matrix.md) · [MITRE ATLAS map](docs/atlas-mapping.md) · [OWASP LLM map](docs/owasp-mapping.md) · [end-to-end logging](docs/end-to-end-logging.md)
+- **Governance & compliance** · [risk & governance](docs/compliance/governance.md) · [framework map](docs/compliance/compliance-framework-mapping.md) · [AI policy](docs/compliance/ai-policy.md) · [incident response](docs/compliance/incident-response.md)
 - **Project** — [contributing](CONTRIBUTING.md) · [security](SECURITY.md) · [changelog](CHANGELOG.md)
 
 ## Repo layout
