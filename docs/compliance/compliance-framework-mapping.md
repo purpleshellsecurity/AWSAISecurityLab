@@ -3,7 +3,8 @@
 For each security control: what attack it stops, and which rules and frameworks it lines
 up with. Control numbers match `docs/controls-matrix.md`.
 
-> Where each column comes from:
+
+> [!NOTE]  
 > - **OWASP + ATLAS**: already mapped in the lab (`docs/owasp-mapping.md`, `docs/atlas-mapping.md`). Real.
 > - **NIST + EU**: reasoned and checked against the published frameworks. Defensible.
 > - **ISO 42001**: not assessed (needs the licensed standard). Out of scope. See the note below.
@@ -14,7 +15,6 @@ up with. Control numbers match `docs/controls-matrix.md`.
 > lab that is expected; stated so it is not a surprise.
 >
 > Fake data. Not a certified system. Not legal advice.
-
 ---
 
 ## EU AI Act tier
@@ -73,16 +73,6 @@ Cross-cutting controls (logging, encryption) do not map to one OWASP risk, so "n
 function. But the lab also does real MAP (classification, the control inventory) and real
 MEASURE (the controls-on/off A/B is MEASURE 2.7; logging plus detections is MEASURE 3.1).
 The function it does least is GOVERN. Those gaps are tracked in `governance.md`.
-
----
-
-## ISO 42001: not assessed
-
-Out of scope on purpose. Mapping against ISO/IEC 42001 needs the licensed standard text;
-an unverified reading would be a liability, not evidence. The honest line: the lab does
-the technical substance of a responsible-AI management system (data governance, access
-control, testing, logging), but it is not audited or certified, and no ISO claim is made.
-
 ---
 
 ## What's closed, what's open
