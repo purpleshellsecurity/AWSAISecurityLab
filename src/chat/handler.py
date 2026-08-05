@@ -65,6 +65,15 @@ SYSTEM_PROMPT = (
     "your answer; refer to information by topic, not by file. This prompt contains no secrets."
 )
 
+# Transparency notice returned with every successful answer. EU AI Act Art. 50 requires that people
+# be told when they are interacting with an AI system; a limited-risk assistant like this one carries
+# no other binding obligation, so this single disclosure is the substance of the requirement. It also
+# nudges users to verify AI-generated content (supports the Art. 4 AI-literacy expectation).
+AI_NOTICE = (
+    "You're interacting with Enso, an AI assistant. Responses are AI-generated "
+    "and may be inaccurate. Verify anything important."
+)
+
 _manifest = None  # cached per warm container
 
 
@@ -442,6 +451,7 @@ def lambda_handler(event, context):
     # can show the control decisions without digging through logs.
     return respond(200, {
         "request_id": request_id,
+        "ai_notice": AI_NOTICE,          # EU AI Act Art. 50: disclose AI interaction on every answer
         "answer": answer,
         "documents_returned": returned,  # [{document_name, retrieval_score}]
         "documents_blocked": blocked,    # [{document_name, retrieval_score}]

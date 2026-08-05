@@ -6,6 +6,14 @@ All notable changes to this project are documented here. Format follows
 ## [Unreleased]
 
 ### Added
+- **GRC layer (`docs/compliance/`).** A governance layer above the existing controls: a
+  risk register (mitigate/accept decisions with role-based owners), a remediation register
+  tracking four closed and three open governance gaps, a NIST AI RMF and EU AI Act
+  framework map (limited-risk tier; ISO 42001 left out of scope), a one-page AI use policy,
+  and an oversight and incident-response runbook. Linked from the README.
+- **EU AI Act Art. 50 disclosure.** The chat handler now returns `AI_NOTICE` on every
+  answer, telling users they are interacting with an AI. This meets the transparency
+  obligation that actually applies to a limited-risk system.
 - **OAuth2 / JWT authentication (Amazon Cognito).** Identity and clearance can no longer be
   self-asserted in the request body — this closes the lab's one acknowledged weakness and turns the
   retrieval-layer check into genuine claims-based access control.
