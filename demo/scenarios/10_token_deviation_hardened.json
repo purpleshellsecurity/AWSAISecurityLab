@@ -1,0 +1,42 @@
+{
+  "name": "Hardened-mode token-volume detection (simulated log usage)",
+  "description": "Authenticated c.jones test uses logged simulation values 200, 250, and 120000. Verified live pretest baseline was 277, so the first two are normal while the third is >10x. Baselines are persistent; verify the actual DynamoDB value before replay. simulate_tokens is a test hook and is NOT actual Bedrock usage or exfiltration. Per-request findings require none/none/token-volume-deviation.",
+  "requests": [
+    {
+      "phase": "token-normal-a",
+      "user": "c.jones",
+      "x_source_ip": "10.12.8.44",
+      "session_id": "sess-token-validation",
+      "prompt": "How do I export a session report?",
+      "simulate_tokens": 200,
+      "expected_status_hardened": 200,
+      "expected_detections": []
+    },
+    {
+      "phase": "token-normal-b",
+      "user": "c.jones",
+      "x_source_ip": "10.12.8.44",
+      "session_id": "sess-token-validation",
+      "prompt": "What are the supported browsers?",
+      "simulate_tokens": 250,
+      "expected_status_hardened": 200,
+      "expected_detections": []
+    },
+    {
+      "phase": "token-spike",
+      "user": "c.jones",
+      "x_source_ip": "10.12.8.44",
+      "session_id": "sess-token-validation",
+      "prompt": "How do I export a session report?",
+      "simulate_tokens": 120000,
+      "expected_status_hardened": 200,
+      "expected_detections": [
+        "token-volume-deviation"
+      ]
+    }
+  ],
+  "expected_model_status": "succeeded",
+  "expected_detections": [
+    "token-volume-deviation"
+  ]
+}

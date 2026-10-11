@@ -16,3 +16,9 @@ __pycache__/
 
 # OS
 .DS_Store
+
+# Local replay evidence may contain identity and document metadata
+artifacts/
+
+# Per-deployment local Terraform state and saved plans managed by scripts/lab.py.
+.lab-state/

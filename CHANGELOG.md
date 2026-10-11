@@ -28,7 +28,7 @@ All notable changes to this project are documented here. Format follows
   - New tests cover claim precedence over the body, the anti-escalation guarantee, and unknown-claim
     fallback. Docs: controls-matrix row 11, owasp-mapping LLM06, TUTORIAL §3/§7/§9.
 - Unit tests (`tests/`, 43 cases) for both Lambdas — clearance lattice, network checkpoint,
-  retrieval scoring, the injection scanner (verified against the real corpus), all four detections,
+  retrieval scoring, the injection scanner (verified against the real corpus), the original four detections,
   the EWMA baseline math, and batch/delivery failure isolation — wired into CI as a `pytest` job.
 - WAF request logging (`aws-waf-logs-*` log group + logging configuration): the outermost hop now
   produces a full per-request log like every other layer, not just metrics and samples.

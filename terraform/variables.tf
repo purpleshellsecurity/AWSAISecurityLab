@@ -42,6 +42,28 @@ variable "name_prefix" {
   default     = "ai-rag-lab"
 }
 
+# environment_id: distinguishes parallel lab environments in tags and detector metrics.
+# Keep it short and stable: it becomes part of the CloudWatch metric namespace.
+variable "environment_id" {
+  description = "Environment identifier for resource tags and the detector metric namespace."
+  type        = string
+  default     = "default"
+
+  validation {
+    condition     = can(regex("^[a-z0-9][a-z0-9-]{0,31}$", var.environment_id))
+    error_message = "environment_id must be 1-32 lowercase letters, numbers, or hyphens and start with a letter or number."
+  }
+}
+
+# manage_account_region_singletons: API Gateway's CloudWatch role setting and Bedrock model-invocation
+# logging are each shared by every workload in an AWS account and Region. Leave them unmanaged by
+# default so a prefixed lab deployment cannot overwrite another environment's configuration.
+variable "manage_account_region_singletons" {
+  description = "Whether this deployment may manage API Gateway account logging and Bedrock model-invocation logging singletons."
+  type        = bool
+  default     = false
+}
+
 # bedrock_model_id: which model the chat Lambda invokes. This value also feeds
 # the least-privilege IAM ARN math in main.tf, so it is a security-relevant
 # input, not just a functional one - the Lambda is permitted to call this model
