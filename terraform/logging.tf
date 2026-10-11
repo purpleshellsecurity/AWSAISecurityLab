@@ -237,6 +237,8 @@ resource "aws_iam_role_policy" "bedrock_logging" {
 # this account/region. Fine in a dedicated lab account; in a shared account, check what exists
 # before deploying and re-enable the original config after teardown.
 resource "aws_bedrock_model_invocation_logging_configuration" "main" {
+  count = var.manage_account_region_singletons ? 1 : 0
+
   logging_config {
     # Log text prompts/completions only. Embeddings and images are disabled to minimize the volume
     # and sensitivity of captured data (data minimization) — text is what matters for LLM abuse review.

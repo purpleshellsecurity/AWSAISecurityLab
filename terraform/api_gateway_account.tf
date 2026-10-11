@@ -44,6 +44,8 @@ resource "aws_iam_role_policy_attachment" "apigw_cloudwatch" {
 # lab's. Fine in a dedicated lab account; in a shared account, note the existing role ARN before
 # deploying so you can restore it after teardown.
 resource "aws_api_gateway_account" "this" {
+  count = var.manage_account_region_singletons ? 1 : 0
+
   cloudwatch_role_arn = aws_iam_role.apigw_cloudwatch.arn
   depends_on          = [aws_iam_role_policy_attachment.apigw_cloudwatch]
 }

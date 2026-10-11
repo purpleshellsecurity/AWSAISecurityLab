@@ -1,0 +1,13 @@
+{
+  "name": "Expired JWT boundary (requires genuine expired token)",
+  "description": "Provide a real previously issued and now expired Cognito ID token in an owner-only local file via --expired-jwt-file. Changing exp without resigning does NOT validate expiration enforcement. Never commit or print the token.",
+  "requests": [
+    {
+      "phase": "jwt-expired",
+      "auth_case": "expired",
+      "user": "c.jones",
+      "prompt": "How do I export a session report?",
+      "expected_status_hardened": 401
+    }
+  ]
+}

@@ -160,7 +160,7 @@ data "aws_iam_policy_document" "detector" {
   # no access to any other table.
   statement {
     sid       = "BaselineState"
-    actions   = ["dynamodb:GetItem", "dynamodb:PutItem", "dynamodb:UpdateItem"]
+    actions   = ["dynamodb:GetItem", "dynamodb:PutItem", "dynamodb:UpdateItem", "dynamodb:ConditionCheckItem"]
     resources = [aws_dynamodb_table.baseline.arn]
   }
 
