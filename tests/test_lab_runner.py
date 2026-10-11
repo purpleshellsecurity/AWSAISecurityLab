@@ -1,4 +1,5 @@
 import importlib.util
+import json
 from pathlib import Path
 
 import pytest
@@ -30,17 +31,58 @@ def test_invalid_or_reserved_ids_are_rejected(lab_id):
         runner.validate_id(lab_id)
 
 
-def test_terraform_arguments_are_explicitly_local_and_hardened(tmp_path):
+def test_terraform_arguments_are_explicitly_local_hardened_and_edge_restricted(tmp_path):
     runner = load()
     state = tmp_path / "terraform.tfstate"
-    args = runner.terraform_args("dev-123", state, "plan")
+    cidrs = ["203.0.113.5/32", "198.51.100.0/24"]
+    args = runner.terraform_args("dev-123", state, "plan", cidrs)
     assert f"-state={state}" in args
     assert "-var=name_prefix=ai-rag-dev-123" in args
     assert "-var=environment_id=dev-123" in args
     assert "-var=controls_enabled=true" in args
     assert "-var=manage_account_region_singletons=false" in args
     assert "-var=alarm_email=" in args
+    assert f"-var=allowed_edge_cidrs={json.dumps(cidrs)}" in args
     assert "terraform/terraform.tfstate" not in " ".join(args)
+
+
+@pytest.mark.parametrize("cidr", ["203.0.113.5/32", "198.51.100.0/24"])
+def test_allowed_edge_cidrs_accept_valid_ipv4_networks(cidr):
+    runner = load()
+    assert runner.validate_edge_cidr(cidr) == cidr
+
+
+@pytest.mark.parametrize("cidr", ["203.0.113.5", "203.0.113.5/33", "203.0.113.5/24", "2001:db8::/32", "0.0.0.0/0"])
+def test_allowed_edge_cidrs_reject_invalid_or_wildcard_networks(cidr):
+    runner = load()
+    with pytest.raises(runner.argparse.ArgumentTypeError):
+        runner.validate_edge_cidr(cidr)
+
+
+@pytest.mark.parametrize("command", ["plan", "up"])
+def test_plan_and_up_require_an_explicit_allowed_edge_cidr(command):
+    runner = load()
+    with pytest.raises(SystemExit):
+        runner.parse_args([command, "dev-123"])
+
+
+def test_verify_and_down_state_list_uses_subcommand_before_state_option(monkeypatch, tmp_path):
+    runner = load()
+    state = tmp_path / "terraform.tfstate"
+    state.write_text("state")
+    paths = {"state": state, "plan": tmp_path / "terraform.tfplan", "directory": tmp_path}
+    commands = []
+
+    class Result:
+        stdout = "ai-rag-dev-123\n"
+
+    def fake_run(args, *_args, **_kwargs):
+        commands.append(args)
+        return Result()
+
+    monkeypatch.setattr(runner, "run", fake_run)
+    runner.state_identity("dev-123", paths, {})
+    assert commands[1][2:] == ["state", "list", f"-state={state}"]
 
 
 def test_command_environment_clears_terraform_variable_and_argument_overrides(monkeypatch):

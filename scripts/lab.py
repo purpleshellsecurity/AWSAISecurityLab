@@ -2,6 +2,8 @@
 """Operate disposable local-state lab deployments without touching legacy state."""
 
 import argparse
+import ipaddress
+import json
 import os
 import re
 import shutil
@@ -41,6 +43,20 @@ def validate_id(lab_id):
     return lab_id
 
 
+def validate_edge_cidr(value):
+    if "/" not in value:
+        raise argparse.ArgumentTypeError("Allowed edge CIDRs must include a prefix length (for example, 203.0.113.5/32).")
+    try:
+        network = ipaddress.ip_network(value, strict=True)
+    except ValueError as exc:
+        raise argparse.ArgumentTypeError(f"Invalid allowed edge CIDR '{value}': {exc}") from exc
+    if network.version != 4:
+        raise argparse.ArgumentTypeError("Allowed edge CIDRs must be IPv4 networks because the lab WAF IP set is IPv4.")
+    if network.prefixlen == 0:
+        raise argparse.ArgumentTypeError("Allowed edge CIDRs must not allow all IPv4 addresses (0.0.0.0/0).")
+    return str(network)
+
+
 def paths_for(lab_id):
     validate_id(lab_id)
     if STATE_ROOT.is_symlink():
@@ -58,9 +74,9 @@ def paths_for(lab_id):
     }
 
 
-def terraform_args(lab_id, state, command):
+def terraform_args(lab_id, state, command, allowed_edge_cidrs=None):
     prefix = f"ai-rag-{lab_id}"
-    return [
+    args = [
         "terraform",
         f"-chdir={TERRAFORM_DIR}",
         command,
@@ -73,6 +89,9 @@ def terraform_args(lab_id, state, command):
         "-var=manage_account_region_singletons=false",
         "-var=alarm_email=",
     ]
+    if allowed_edge_cidrs is not None:
+        args.append(f"-var=allowed_edge_cidrs={json.dumps(allowed_edge_cidrs)}")
+    return args
 
 
 def command_env(profile, region):
@@ -143,7 +162,7 @@ def state_identity(lab_id, paths, env):
     if output != expected:
         raise LabError(f"State identity mismatch: expected '{expected}', observed '{output or '<empty>'}'.")
     resources = run(
-        ["terraform", f"-chdir={TERRAFORM_DIR}", "state", f"-state={paths['state']}", "list"],
+        ["terraform", f"-chdir={TERRAFORM_DIR}", "state", "list", f"-state={paths['state']}"],
         env,
         capture_output=True,
     ).stdout.splitlines()
@@ -165,22 +184,22 @@ def print_locations(lab_id, paths):
     print(f"Cleanup: python3 scripts/lab.py down {lab_id} --confirm {lab_id}")
 
 
-def plan(lab_id, paths, env):
+def plan(lab_id, paths, env, allowed_edge_cidrs):
     paths["directory"].mkdir(mode=0o700, parents=True, exist_ok=True)
     if paths["plan"].is_symlink():
         raise LabError(f"Refusing to overwrite symbolic-link plan path: {paths['plan']}")
     if paths["plan"].exists():
         paths["plan"].unlink()
-    args = terraform_args(lab_id, paths["state"], "plan") + [f"-out={paths['plan']}"]
+    args = terraform_args(lab_id, paths["state"], "plan", allowed_edge_cidrs) + [f"-out={paths['plan']}"]
     run(args, env)
     print(f"Saved plan: {paths['plan']}")
 
 
-def up(lab_id, paths, env):
+def up(lab_id, paths, env, allowed_edge_cidrs):
     ensure_new(paths)
     init(env)
-    plan(lab_id, paths, env)
-    run(terraform_args(lab_id, paths["state"], "apply") + [str(paths["plan"])], env)
+    plan(lab_id, paths, env, allowed_edge_cidrs)
+    run(terraform_args(lab_id, paths["state"], "apply", allowed_edge_cidrs) + [str(paths["plan"])], env)
     state_identity(lab_id, paths, env)
     print("Apply complete with account/Region singleton management disabled.")
 
@@ -230,6 +249,14 @@ def parse_args(argv):
     for command in ("plan", "up", "verify", "down"):
         subparser = subparsers.add_parser(command)
         subparser.add_argument("id", help="Safe local deployment identifier")
+        if command in ("plan", "up"):
+            subparser.add_argument(
+                "--allowed-edge-cidr",
+                action="append",
+                type=validate_edge_cidr,
+                required=True,
+                help="IPv4 CIDR permitted to reach the live API; repeat for each authorized network.",
+            )
         if command == "down":
             subparser.add_argument("--confirm", help="Must exactly equal the deployment identifier")
     return parser.parse_args(argv)
@@ -244,9 +271,9 @@ def main(argv=None):
         preflight(env, args.region)
         if args.command == "plan":
             init(env)
-            plan(lab_id, paths, env)
+            plan(lab_id, paths, env, args.allowed_edge_cidr)
         elif args.command == "up":
-            up(lab_id, paths, env)
+            up(lab_id, paths, env, args.allowed_edge_cidr)
         elif args.command == "verify":
             verify(lab_id, paths, env)
         else:

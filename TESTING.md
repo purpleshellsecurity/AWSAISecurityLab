@@ -15,7 +15,10 @@ disposable environment. Never use controls-off mode to test a shared system or r
 For a same-account isolated deployment, use `scripts/lab.py` with a new lowercase, hyphenated
 identifier. It derives an isolated prefix/environment, keeps state in the ignored
 `.lab-state/<id>/terraform.tfstate` path, always disables account/Region singleton management, and
-does not add an alarm-email subscription. Do not set
+does not add an alarm-email subscription. `plan` and `up` require an explicit, non-wildcard IPv4
+`--allowed-edge-cidr`; obtain an authorized test source CIDR from the responsible network operator
+(or use the approved public workstation address as a `/32`). This is a deliberate live-access
+decision: the runner never looks up or automatically permits the caller's IP. Do not set
 `manage_account_region_singletons=true` in a shared account.
 
 | Observe | Minimum evidence | Does not prove |
@@ -63,15 +66,15 @@ caught a poisoned doc · `leaked_unauthorized` = controls off, a doc escaped.
 ## Phase 1 — Deploy & smoke
 
 ```bash
-python3 scripts/lab.py plan sandbox-20261010  # preflight + reviewed saved local plan
-python3 scripts/lab.py up sandbox-20261010    # apply that isolated local plan
+python3 scripts/lab.py plan sandbox-20261010 --allowed-edge-cidr 203.0.113.5/32  # preflight + reviewed saved local plan
+python3 scripts/lab.py up sandbox-20261010 --allowed-edge-cidr 203.0.113.5/32    # apply that isolated local plan
 ```
 
 For an isolated same-account lab, review the generated plan before applying it:
 
 ```bash
-python3 scripts/lab.py plan sandbox-20261010
-python3 scripts/lab.py up sandbox-20261010
+python3 scripts/lab.py plan sandbox-20261010 --allowed-edge-cidr 203.0.113.5/32
+python3 scripts/lab.py up sandbox-20261010 --allowed-edge-cidr 203.0.113.5/32
 python3 scripts/lab.py verify sandbox-20261010
 # Only when the lab is no longer needed:
 python3 scripts/lab.py down sandbox-20261010 --confirm sandbox-20261010
