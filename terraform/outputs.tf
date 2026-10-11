@@ -33,6 +33,18 @@ output "controls_enabled" {
   value       = var.controls_enabled
 }
 
+# The detector metric namespace is environment-specific. Use this output for any
+# read-only evidence query so the query cannot accidentally inspect another lab.
+output "detector_metric_namespace" {
+  description = "CloudWatch metric namespace used by this deployment's detector and detection alarms."
+  value       = local.detections_namespace
+}
+
+output "detection_alarm_prefix" {
+  description = "Prefix shared by this deployment's CloudWatch detection alarm names."
+  value       = local.prefix
+}
+
 # Where detection alarms land — subscribe here (or check email) to observe the detect-and-respond path.
 output "sns_topic_arn" {
   description = "SNS topic that detection alarms publish to."

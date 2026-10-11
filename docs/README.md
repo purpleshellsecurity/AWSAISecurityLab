@@ -14,7 +14,8 @@
 ### Operate
 | Doc | What it answers |
 |---|---|
-| [../TESTING.md](../TESTING.md) | A step-by-step runbook — deploy, attack, and prove each control. |
+| [../TESTING.md](../TESTING.md) | Approved, bounded manual E2E path — expected observations and evidence limits. |
+| [soc-detection-validation.md](soc-detection-validation.md) | Detector predicates and the separate evidence required for findings, metrics, alarms, and delivery. |
 | [tuning.md](tuning.md) | Issues found in testing, the knobs to turn, diagnostics, and AWS doc links. |
 | [../demo/scenarios/README.md](../demo/scenarios/README.md) | How to write and replay your own attack scenarios. |
 

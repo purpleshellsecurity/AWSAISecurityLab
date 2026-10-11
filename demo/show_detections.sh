@@ -1,23 +1,32 @@
 #!/usr/bin/env bash
-# Shows what the detector found: recent detection log lines + any alarms currently in ALARM state.
-# This is the fast "did my controls catch it?" check after running ./demo/replay.py.
-set -euo pipefail  # -e: stop on first error  -u: error on unset vars  -o pipefail: catch piped failures
-
-# Locate terraform/ relative to this script, then read the detector Lambda's log group name from it.
+# Manual finding/alarms inspection. The replay CLI now performs request-scoped
+# detection checks automatically for scenarios with expected_detections.
+set -euo pipefail
 TF_DIR="$(cd "$(dirname "$0")/../terraform" && pwd)"
 DETECTOR_LG="$(terraform -chdir="$TF_DIR" output -raw detector_log_group)"
 
-# --- Recent detection findings -------------------------------------------------------------------
-# Tail the detector's log group and keep only the structured finding lines (event=="detection").
-# If nothing matches, remind the user the log subscription can lag ~30-60s.
-echo "### Recent detections (last 10 min) ###"
-aws logs tail "$DETECTOR_LG" --since 10m --format short 2>/dev/null | grep -i '"event": "detection"' \
-  || echo "(no detections yet - give the log subscription 30-60s and retry)"
+echo "Detector findings — last 10 minutes (all requests)"
+if ! LOGS="$(aws logs tail "$DETECTOR_LG" --since 10m --format short)"; then
+  echo "ERROR: Could not read CloudWatch detector logs. Check AWS identity/permissions." >&2
+  exit 1
+fi
+if printf '%s\n' "$LOGS" | grep -F '"event": "detection"'; then
+  :
+else
+  echo "No detector findings observed. This is expected for normal baseline traffic."
+  echo "Note: an empty result does not prove detector or notification delivery health."
+fi
 
 echo
-# --- Alarms currently firing ---------------------------------------------------------------------
-# List CloudWatch alarms that are in ALARM state and belong to this lab (name prefix ai-rag-lab).
-echo "### Alarms currently in ALARM ###"
-aws cloudwatch describe-alarms --state-value ALARM \
-  --query "MetricAlarms[?starts_with(AlarmName, 'ai-rag-lab')].AlarmName" --output table \
-  || echo "(none)"
+echo "Alarms currently in ALARM"
+# Ask AWS for matching alarms without losing nonzero exit codes.
+if ! ALARMS="$(aws cloudwatch describe-alarms --state-value ALARM \
+  --query "MetricAlarms[?starts_with(AlarmName, 'ai-rag-lab')].AlarmName" --output text)"; then
+  echo "ERROR: Could not query CloudWatch alarm state." >&2
+  exit 1
+fi
+if [[ -n "$ALARMS" && "$ALARMS" != "None" ]]; then
+  printf '%s\n' "$ALARMS"
+else
+  echo "None currently in ALARM (alarms may have returned to OK)."
+fi

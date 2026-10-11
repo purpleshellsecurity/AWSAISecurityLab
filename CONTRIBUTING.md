@@ -45,6 +45,11 @@ python -c "import json,glob;[json.load(open(f)) for f in glob.glob('demo/scenari
 python -m pytest tests/ -q   # unit tests for both Lambdas (pip install pytest boto3)
 ```
 
+## CI runner safety
+
+CI runs on GitHub-hosted runners. Pushes and pull requests from branches in this repository run
+validation; pull requests from forks are intentionally skipped.
+
 ## How to extend the lab
 
 See **[TUTORIAL.md](TUTORIAL.md) §8 (Extending it)** for the details. In short:

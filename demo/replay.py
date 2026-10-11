@@ -26,6 +26,7 @@ demo/scenarios/ and editing the `requests` list (any of: user, service_account, 
 simulate_tokens).
 """
 # --- Imports: standard library only, so the demo runs with no pip install -------------------------
+import base64          # decode JWT metadata without logging tokens
 import argparse         # command-line flags (--scenario, --delay, --url, ...)
 import json             # read scenario files and parse API responses
 import os               # path handling + reading API_URL/API_KEY from the environment
@@ -34,6 +35,7 @@ import sys             # exit codes and error messages
 import time            # inter-request delay pacing
 import urllib.error     # catch HTTP errors from urllib
 import urllib.request   # POST to the API (no third-party HTTP dependency)
+from detection_check import check as check_detections, DetectionQueryError
 
 # --- Paths (resolved relative to this file, so it works from any working directory) --------------
 HERE = os.path.dirname(os.path.abspath(__file__))
@@ -43,6 +45,9 @@ DEFAULT_SCENARIO = os.path.join(SCENARIO_DIR, "99_incident_full.json")  # the fu
 # Only these keys are forwarded from a scenario entry into the request body; anything else in the
 # entry (e.g. "phase") is metadata for the replay tool, not the API.
 PASSTHROUGH = ("user", "service_account", "x_source_ip", "session_id", "prompt", "simulate_tokens")
+# API Gateway can briefly return 403 while a newly created API key/usage-plan association
+# propagates. Only the explicit signed-JWT positive control is eligible for this retry.
+POST_CREATE_READINESS_BACKOFF_SECONDS = (1, 2, 4)
 
 
 def list_scenarios():
@@ -113,6 +118,61 @@ def get_token(client_id, username, password, cache):
     cache[username] = token
     return token
 
+def altered_signature(token):
+    """Change the actual signature, not the expiry/claims (which are signed)."""
+    parts = token.split(".")
+    if len(parts) != 3 or not parts[2]:
+        raise ValueError("Cognito did not return a signed three-part JWT")
+    last = parts[2][-1]
+    # Change the first signature character to avoid base64url trailing pad ambiguity.
+    signature = parts[2]
+    parts[2] = ("A" if signature[0] != "A" else "B") + signature[1:]
+    return ".".join(parts)
+
+
+def expired_jwt_from_file(path):
+    """Read a real, previously issued expired JWT; never print/store its content."""
+    import stat
+    import time as clock
+    if not path:
+        raise ValueError("Expired JWT test requires --expired-jwt-file PATH (real old Cognito ID token)")
+    if os.stat(path).st_mode & (stat.S_IRWXG | stat.S_IRWXO):
+        raise ValueError("Expired JWT file permissions must be owner-only (chmod 600)")
+    with open(path, encoding="utf-8") as f:
+        token = f.read().strip()
+    parts = token.split(".")
+    if len(parts) != 3:
+        raise ValueError("Expired JWT file must contain one complete three-part token")
+    try:
+        encoded = parts[1]
+        claims = json.loads(base64.urlsafe_b64decode(encoded + "=" * (-len(encoded) % 4)))
+        expiry = claims["exp"]
+    except (KeyError, ValueError, TypeError) as exc:
+        raise ValueError("Expired JWT file contains invalid expiry metadata") from exc
+    if type(expiry) not in (int, float) or expiry >= clock.time():
+        raise ValueError("JWT in file is not expired; acquire an earlier Cognito ID token")
+    return token
+
+
+def auth_test_token(mode, client_id, username, password, cache, expired_file=None):
+    """Explicit identity-boundary inputs; refuse to silently substitute missing credentials."""
+    if mode == "missing":
+        return None
+    if mode == "malformed":
+        return "malformed.jwt.not-a-signature"
+    if mode == "expired":
+        return expired_jwt_from_file(expired_file)
+    if not client_id or not username:
+        raise ValueError("JWT test needs hardened Cognito mode and a named test user")
+    token = get_token(client_id, username, password, cache)
+    if not token:
+        raise ValueError("Cognito login failed; cannot validate JWT signature/positive control")
+    if mode == "tampered":
+        return altered_signature(token)
+    if mode == "valid":
+        return token
+    raise ValueError("Unknown auth_case (allowed: missing, malformed, tampered, expired, valid)")
+
 
 def post(url, key, body, token=None):
     """POST one JSON request to the chat API and return (http_status, parsed_json_response).
@@ -124,12 +184,105 @@ def post(url, key, body, token=None):
     if token:
         headers["Authorization"] = token  # Cognito authorizer validates this JWT at the edge
     req = urllib.request.Request(url, data=data, method="POST", headers=headers)
+    def parse_response(raw, headers):
+        try:
+            parsed = json.loads(raw or b"{}")
+        except (ValueError, TypeError):
+            parsed = {}
+        if not isinstance(parsed, dict):
+            parsed = {}
+        # The JWT authorizer can reject a request before application JSON exists.
+        # Preserve headers for correlation; never log credentials or Authorization.
+        if headers:
+            gateway_id = headers.get("x-amzn-RequestId")
+            extended_id = headers.get("x-amz-apigw-id")
+            if gateway_id:
+                parsed["_api_gateway_request_id"] = gateway_id
+            if extended_id:
+                parsed["_api_gateway_extended_id"] = extended_id
+        return parsed
+
     try:
         with urllib.request.urlopen(req, timeout=40) as r:
-            return r.status, json.loads(r.read())
+            return r.status, parse_response(r.read(), r.headers)
     except urllib.error.HTTPError as e:
-        # A 4xx/5xx (e.g. the checkpoint-1 403) is expected output, not a crash — return its body.
-        return e.code, json.loads(e.read() or b"{}")
+        return e.code, parse_response(e.read(), e.headers)
+
+
+def is_readiness_retry_eligible(auth_case, client_id, key, token, expected_status):
+    """Return whether this is the explicit authenticated positive control.
+
+    Negative credential tests and ordinary scenario traffic must observe their first response
+    unchanged. The API key is always required by the API method, and the valid auth_case obtains
+    a Cognito ID token through auth_test_token before this predicate is evaluated.
+    """
+    return (
+        auth_case == "valid"
+        and bool(client_id)
+        and bool(key)
+        and bool(token)
+        and expected_status == 200
+    )
+
+
+def post_with_readiness_retry(url, key, body, token, retry_eligible, sleep=time.sleep):
+    """Retry a transient post-create 403 for the explicit authorized positive control only."""
+    status, response = post(url, key, body, token)
+    attempts = 1
+    for delay in POST_CREATE_READINESS_BACKOFF_SECONDS:
+        if not retry_eligible or status != 403:
+            break
+        sleep(delay)
+        status, response = post(url, key, body, token)
+        attempts += 1
+    return status, response, attempts
+
+
+def classify_request_outcome(status, retry_eligible, attempts):
+    """Classify edge observations without attributing a 403 to a specific AWS component."""
+    if retry_eligible and status == 200:
+        return "VERIFIED SUCCESS"
+    if retry_eligible and status == 403 and attempts > 1:
+        return "READINESS TIMEOUT / INCONCLUSIVE"
+    if status in (401, 403):
+        return "AUTHORIZATION DENIAL"
+    return "OBSERVED"
+
+
+def verify_per_request_detections(requests, results, findings):
+    """Compare exact finding sets for each request, including negative controls.
+
+    Return (decision, failures). Missing evidence is INCONCLUSIVE, never PASS.
+    """
+    observed_by_request = {}
+    for finding in findings:
+        observed_by_request.setdefault(finding.get("request_id"), set()).add(
+            finding.get("detection"))
+    errors = []
+    incomplete = False
+    for idx, entry in enumerate(requests):
+        if "expected_detections" not in entry:
+            errors.append(f"request {idx + 1}: per-request detection contract absent (INCONCLUSIVE)")
+            incomplete = True
+            continue
+        expected = entry["expected_detections"]
+        if not isinstance(expected, list) or any(not isinstance(d, str) for d in expected):
+            errors.append(f"request {idx + 1}: invalid per-request detection contract")
+            incomplete = True
+            continue
+        request_id = results[idx].get("request_id")
+        if not request_id:
+            errors.append(f"request {idx + 1}: no application request ID for detection check")
+            incomplete = True
+            continue
+        observed = observed_by_request.get(request_id, set())
+        if observed != set(expected):
+            errors.append(
+                f"request {idx + 1} ({entry.get('phase', '-')}) detector mismatch: "
+                f"expected {sorted(set(expected))}, observed {sorted(observed)}")
+    if any("detector mismatch" in error for error in errors):
+        return "FAIL", errors
+    return ("INCONCLUSIVE" if incomplete else "PASS"), errors
 
 
 def main():
@@ -143,6 +296,13 @@ def main():
     ap.add_argument("--limit", type=int, default=0)                  # cap number of requests (0 = all)
     ap.add_argument("--no-auth", action="store_true", help="don't fetch/send JWTs (baseline / controls-off deploy)")
     ap.add_argument("--client-id", default=os.environ.get("COGNITO_CLIENT_ID"))  # override Cognito app client id
+    ap.add_argument("--assert-expected", action="store_true",
+                    help="fail when expected HTTP status is missing or mismatched")
+    ap.add_argument("--results-json", help="write outcome evidence without tokens or prompt text")
+    ap.add_argument("--no-detection-check", action="store_true", help="skip automatic CloudWatch finding check")
+    ap.add_argument("--detection-timeout", type=int, default=60, help="seconds to poll for expected findings (default 60)")
+    ap.add_argument("--verbose", action="store_true", help="show document names and request IDs")
+    ap.add_argument("--expired-jwt-file", help="owner-only local file with an already-expired genuine Cognito ID token")
     args = ap.parse_args()
 
     if args.list:
@@ -163,76 +323,188 @@ def main():
                 or os.environ.get("TF_VAR_demo_user_password")
                 or "LabDemo#Passw0rd!")
     token_cache = {}
-    if client_id:
-        print(f"Auth: Cognito JWT (client {client_id}) — identity/clearance come from verified claims.\n")
-    else:
-        print("Auth: API key only (baseline / controls-off) — identity is self-asserted in the body.\n")
+    mode_label = "HARDENED / Cognito" if client_id else "BASELINE / unauthenticated"
 
     # --- Load the scenario and optionally trim it ----------------------------------------------
     with open(args.scenario) as f:
         scenario = json.load(f)
     requests = scenario["requests"]
+    if not client_id and any("auth_case" in e for e in requests):
+        ap.error("auth_case tests require hardened Cognito mode; do not use --no-auth")
     if args.limit:
         requests = requests[: args.limit]
 
-    print(f"Replaying {len(requests)} requests against {url}\n")
+    print("\nAWS AI SECURITY LAB | REPLAY")
+    print(f"Scenario: {os.path.basename(args.scenario)} | Mode: {mode_label} | Requests: {len(requests)}")
+    if args.verbose:
+        print(f"Endpoint: {url}")
+    print("-" * 77)
+    print(f"{'#':>2}  {'Principal':<18} {'HTTP':<5} {'Returned':>8} {'Blocked':>8}  Outcome")
+    print("-" * 77)
     # Running tallies for the end-of-run summary.
     fired = blocked_net = blocked_doc = guardrail = jwt_unauth = 0
+    results = []
+    failures = []
     for i, entry in enumerate(requests, 1):
         # Build the request body from only the passthrough keys present in this entry.
         body = {k: entry[k] for k in PASSTHROUGH if k in entry}
         # In hardened mode, authenticate as this entry's user (if it maps to a Cognito account) and
         # attach the JWT. Entries with no such user go tokenless -> the authorizer 401s them.
-        token = get_token(client_id, entry["user"], password, token_cache) if client_id and entry.get("user") else None
-        status, resp = post(url, key, body, token)
+        auth_case = entry.get("auth_case")
+        try:
+            if auth_case:
+                token = auth_test_token(auth_case, client_id, entry.get("user"),
+                                        password, token_cache, args.expired_jwt_file)
+            else:
+                token = get_token(client_id, entry["user"], password, token_cache) if client_id and entry.get("user") else None
+        except (ValueError, OSError) as exc:
+            print(f"ERROR: identity test setup failed for request {i}: {exc}", file=sys.stderr)
+            return 2
+        expectation_key = "expected_status_hardened" if client_id else "expected_status_baseline"
+        expected_status = entry.get(expectation_key)
+        retry_eligible = is_readiness_retry_eligible(
+            auth_case, client_id, key, token, expected_status)
+        status, resp, attempts = post_with_readiness_retry(
+            url, key, body, token, retry_eligible)
         fired += 1
-        phase = entry.get("phase", "")          # human-readable label for this step (attack phase)
-        rid = resp.get("request_id", "?")       # correlation id to look the request up in the logs
-        # A 401 from the JWT authorizer: no/invalid token reached the hardened front door. Expected
-        # for the service-account machine-path entries (no Cognito user -> no token) — the edge
-        # rejects them before the Lambda runs, which in hardened mode is the correct, stronger result.
+        outcome_classification = classify_request_outcome(status, retry_eligible, attempts)
+        results.append({
+            "scenario": os.path.basename(args.scenario), "index": i,
+            "phase": entry.get("phase", ""), "auth_case": auth_case,
+            "mode": "hardened" if client_id else "baseline",
+            "http_status": status, "expected_http_status": expected_status,
+            "outcome_classification": outcome_classification,
+            "readiness_retry_eligible": retry_eligible,
+            "attempts": attempts,
+            "request_id": resp.get("request_id"),
+            "api_gateway_request_id": resp.get("_api_gateway_request_id"),
+            "api_gateway_extended_id": resp.get("_api_gateway_extended_id"),
+            "guardrail_action": resp.get("guardrail_action"),
+            "model_status": resp.get("model_status"),
+            "documents_blocked": [d.get("document_name") for d in resp.get("documents_blocked", [])],
+            "documents_returned": [d.get("document_name") for d in resp.get("documents_returned", [])],
+        })
+        expected_model_status = entry.get("expected_model_status", scenario.get("expected_model_status"))
+        if expected_model_status is not None:
+            observed_model_status = resp.get("model_status")
+            if observed_model_status != expected_model_status:
+                failures.append(
+                    f"request {i}: expected model_status={expected_model_status}, "
+                    f"observed {observed_model_status or 'NOT_REPORTED'} (FAIL)")
+        if args.assert_expected:
+            if type(expected_status) is not int:
+                failures.append(f"request {i}: {expectation_key} missing or invalid (INCONCLUSIVE)")
+            elif status != expected_status:
+                failures.append(f"request {i}: expected HTTP {expected_status}, observed {status} (FAIL)")
+        phase = entry.get("phase", "")
+        rid = resp.get("request_id") or resp.get("_api_gateway_request_id") or "-"
+        rid_origin = "app" if resp.get("request_id") else ("gateway" if resp.get("_api_gateway_request_id") else "unavailable")
+        rb = results[-1]["documents_blocked"]
+        rr = results[-1]["documents_returned"]
+        ga = resp.get("guardrail_action", "none")
         if status == 401:
             jwt_unauth += 1
-            who = body.get("user") or body.get("service_account", "")
-            print(f"[{i:>2}] {phase:<22} {who:<12} -> 401 jwt-unauthenticated (no valid token)  rid={rid}")
-            continue
-        # Checkpoint-1 network block returns 403 before any retrieval — record and move on.
         if status == 403:
-            blocked_net += 1
-            print(f"[{i:>2}] {phase:<22} {body.get('user',''):<10} -> 403 network-blocked   rid={rid}")
-            continue
-        # Otherwise inspect what the controls did: guardrail intervention + docs blocked/returned.
-        ga = resp.get("guardrail_action", "none")
-        rb = [d["document_name"] for d in resp.get("documents_blocked", [])]
-        rr = [d["document_name"] for d in resp.get("documents_returned", [])]
+            blocked_net += 1  # Origin of 403 requires log correlation.
         if ga == "intervened":
             guardrail += 1
         if rb:
             blocked_doc += 1
-        # Assemble the per-request status flags shown on the console line.
-        flags = []
+        outcome = outcome_classification
+        if args.assert_expected:
+            if type(expected_status) is not int:
+                outcome += " / EXPECTATION INCONCLUSIVE"
+            elif status == expected_status:
+                outcome += " / HTTP MATCH"
+            else:
+                outcome += " / HTTP MISMATCH"
         if ga == "intervened":
-            flags.append("GUARDRAIL")
-        if rb:
-            flags.append(f"BLOCKED@RETRIEVAL={rb}")
-        if rr:
-            flags.append(f"returned={rr}")
-        print(f"[{i:>2}] {phase:<22} {body.get('user',''):<10} -> {status} {' '.join(flags)}  rid={rid}")
+            outcome += " / GUARDRAIL"
+        principal = body.get("user") or body.get("service_account") or "-"
+        retry_note = f" after {attempts} attempts" if attempts > 1 else ""
+        print(f"{i:>2}  {principal[:18]:<18} {status:<5} {len(rr):>8} {len(rb):>8}  {outcome}{retry_note}")
+        if args.verbose:
+            print(f"      Phase: {phase or '-'} | Request ID ({rid_origin}): {rid}")
+            if rr:
+                print(f"      Returned: {', '.join(str(x) for x in rr)}")
+            if rb:
+                print(f"      Blocked:  {', '.join(str(x) for x in rb)}")
+            if resp.get("model_status"):
+                print(f"      Model execution: {resp['model_status']} | Guardrail: {ga}")
+            if status == 401:
+                print("      JWT rejected at edge; app detectors not exercised")
+            elif status == 403:
+                if retry_eligible and attempts > 1:
+                    print("      Post-create readiness retries exhausted; result is inconclusive")
+                else:
+                    print("      Authorization denial; exact 403 origin requires correlated AWS logs")
         time.sleep(args.delay)  # pace requests so the log timeline reads naturally
 
-    # --- Summary + next steps ------------------------------------------------------------------
-    print(
-        f"\nDone. {fired} requests | {jwt_unauth} jwt-rejected | {blocked_net} network-blocked | "
-        f"{blocked_doc} blocked-at-retrieval | {guardrail} guardrail-intervened."
-    )
-    if jwt_unauth:
-        print(
-            f"Note: {jwt_unauth} request(s) were rejected at the JWT front door — the service-account "
-            "machine-path entries have no Cognito user, so the hardened authorizer 401s them before\n"
-            "      the Lambda runs. To exercise the service-account/token detections instead, deploy the\n"
-            "      baseline (apply -var=controls_enabled=false) and run: ./demo/replay.py --no-auth"
-        )
-    print("Give the log subscription ~30-60s, then: ./demo/show_detections.sh   (or ./demo/trace.sh <body>)")
+    # Emit observations without credential or prompt values. HTTP status alone is NOT
+    # evidence that the intended Lambda, detector, or notification path executed.
+    if args.results_json:
+        with open(args.results_json, "w", encoding="utf-8") as output:
+            json.dump({"schema_version": 1, "requests": results,
+                       "http_assertion_failures": failures}, output, indent=2)
+            output.write("\n")
+    for failure in failures:
+        print(f"ASSERTION: {failure}", file=sys.stderr)
+    print("-" * 77)
+    total_returned = sum(len(x["documents_returned"]) for x in results)
+    total_blocked = sum(len(x["documents_blocked"]) for x in results)
+    successful = sum(x["http_status"] == 200 for x in results)
+    print(f"HTTP 200: {successful}/{fired} | Documents returned: {total_returned} | "
+          f"Documents blocked: {total_blocked} | Guardrail: {guardrail}")
+    if args.assert_expected:
+        print(f"HTTP assertions: {fired - len(failures)}/{fired} matched (HTTP only)")
+    else:
+        print("HTTP assertions: NOT RUN (use --assert-expected)")
+    if args.results_json:
+        print(f"Evidence: {args.results_json}")
+    if scenario.get("expected_model_status") is not None or any("expected_model_status" in e for e in requests):
+        model_mismatches = [f for f in failures if "model_status=" in f]
+        print(f"Model execution assertions: {'FAIL' if model_mismatches else 'PASS'} "
+              f"({len(requests) - len(model_mismatches)}/{len(requests)} matched)")
+    print("Control effectiveness and notification delivery require separate evidence.")
+    # Run the detector check as part of this command, not as a separate manual step.
+    # Scenario expectations must be explicit; no blanket assumption that every
+    # request should create an alert.
+    if not args.no_detection_check:
+        expected = scenario.get("expected_detections")
+        request_ids = {item["request_id"] for item in results if item.get("request_id")}
+        if expected is None:
+            print("Detections: NOT TESTED (scenario has no expected_detections contract)")
+        elif not request_ids:
+            print("Detections: INCONCLUSIVE (API returned no request IDs)")
+        else:
+            log_group = tf_output("detector_log_group", required=False)
+            if not log_group:
+                print("Detections: INCONCLUSIVE (no detector log group in Terraform outputs)")
+            else:
+                print("Checking CloudWatch findings for this replay...", flush=True)
+                decision, findings, reason = check_detections(
+                    log_group, request_ids, expected,
+                    timeout_seconds=args.detection_timeout)
+                aggregate_decision = decision
+                # Defer final success message until per-request validation completes.
+                if findings:
+                    for finding in findings:
+                        print(f"  {finding.get('detection', '?')} | request_id={finding.get('request_id', '?')}")
+                # Optional strict per-request expectation: a campaign only passes if
+                # each distinct request generated exactly its declared finding set.
+                # The existing aggregate check alone can pass despite alerts on benign phases.
+                if decision == "PASS" and any("expected_detections" in e for e in requests):
+                    per_request_decision, per_request_errors = verify_per_request_detections(
+                        requests, results, findings)
+                    failures.extend(per_request_errors)
+                    decision = per_request_decision
+                    if decision == "PASS":
+                        print("Per-request detection assertions: PASS")
+                print(f"Detections: {decision} — {reason}"
+                      + (" (per-request assertions)" if decision != aggregate_decision else ""))
+                if decision in ("FAIL", "INCONCLUSIVE"):
+                    failures.append(f"detection verification: {decision} — {reason}")
+    return 1 if failures else 0
 
 
 if __name__ == "__main__":

@@ -58,3 +58,41 @@ This doesn't change what's demonstrated: the security boundary — authorize per
 | Entitlements in a JSON manifest | Centralized entitlement service / Verified Permissions (Cedar) |
 | Detector Lambda on log subscription | Security Lake + Athena/OpenSearch detections, or GuardDuty + Detective |
 | Single account | Multi-account with SCPs, delegated security tooling, AWS Config conformance packs |
+
+
+## AI security telemetry vs. SOC findings (v2 engineering cleanup)
+
+The chat Lambda emits a versioned JSON `security_event` for each confirmed Bedrock
+Guardrail intervention to its CloudWatch log group. This is a record of a security
+control decision **not** a detection finding or an automatic incident. SIEMs can
+ingest this CloudWatch stream using a separately configured export/forwarder;
+the lab does **not** claim that a SIEM integration is deployed.
+
+Schema `1.0`: `log_type=security_event`, `schema_version`,
+`event_category=ai_security`, `event_action=guardrail_intervention`,
+`event_outcome=blocked`, `request_id`, `session_id`, `principal`,
+`identity_source`, `source_ip`, `source_ip_simulated`,
+`guardrail_action`, `matched_policies`, and `model_status`.
+`source_ip_simulated=true` means the source was supplied through the
+lab-only request-body override, **not** independently observed network identity.
+
+The event deliberately excludes the raw prompt, response, and document contents.
+The routine `chat` log similarly records `prompt_length` instead of raw prompt.
+The existing `guardrail_trace` is retained for policy evidence; it may contain
+sensitive provider diagnostic content, so access and retention controls remain
+necessary. Other application records still require a separate privacy/security
+review before general-purpose SIEM export.
+
+The detector Lambda continues to implement the original four analytics:
+sensitive retrieval anomaly,
+indirect injection in retrieved content, and token-volume deviation.
+A single Guardrail intervention does **not** automatically produce an SNS alert.
+Future correlation analytics (for example, repeated interventions within a bounded
+time window) require their own validated behavioral thresholds, baseline, and
+negative tests. They are out of scope for this cleanup.
+
+**Evidence contract:** For a new live prompt-injection replay, establish the
+model succeeded, the Guardrail intervened, a corresponding `security_event`
+appeared in `/aws/lambda/ai-rag-lab-chat` with the same `request_id`, and the
+trace showed the matched policy. Only independently observed detector findings
+may be called SOC alerts; notification delivery requires separate verification.

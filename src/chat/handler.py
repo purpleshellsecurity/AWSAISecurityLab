@@ -94,12 +94,55 @@ def get_manifest():
 
 def clearance_rank(level):
     """Map a classification/clearance label to its position in CLASS_ORDER (higher = more sensitive).
-    Unknown labels fall back to 0 (Public) — a fail-safe: an unrecognized level never grants access
-    above the lowest tier."""
-    return CLASS_ORDER.index(level) if level in CLASS_ORDER else 0
+    Unknown labels are an invalid authorization state, not Public access."""
+    if level not in CLASS_ORDER:
+        raise ValueError("Unknown classification or clearance")
+    return CLASS_ORDER.index(level)
 
 
 # --- Checkpoint 1 helper: network / identity ------------------------------------------------------
+def matched_guardrail_policies(trace):
+    """Return only AWS-confirmed blocking policy identifiers, never prompt/response text."""
+    matches = []
+    if not isinstance(trace, dict):
+        return matches
+    assessments = list((trace.get("inputAssessment") or {}).values())
+    for group in (trace.get("outputAssessments") or {}).values():
+        assessments.extend(group if isinstance(group, list) else [])
+    for assessment in assessments:
+        if not isinstance(assessment, dict):
+            continue
+        for topic in (assessment.get("topicPolicy") or {}).get("topics", []):
+            if topic.get("detected") is True and topic.get("action") == "BLOCKED":
+                matches.append("topic:" + str(topic.get("name", "unknown")))
+        for filt in (assessment.get("contentPolicy") or {}).get("filters", []):
+            if filt.get("detected") is True and filt.get("action") == "BLOCKED":
+                matches.append("content:" + str(filt.get("type", "unknown")))
+        for key in ("sensitiveInformationPolicy", "wordPolicy"):
+            # Record the policy family when its assessment reported a block.
+            policy = assessment.get(key) or {}
+            if any(item.get("action") == "BLOCKED"
+                   for value in policy.values() if isinstance(value, list)
+                   for item in value if isinstance(item, dict)):
+                matches.append(key)
+    return sorted(set(matches))
+
+
+def guardrail_assessment_stage(trace):
+    """Classify the stage from confirmed AWS blocking assessments, not stopReason."""
+    if not isinstance(trace, dict):
+        return "unknown"
+    input_block = bool(matched_guardrail_policies({"inputAssessment": trace.get("inputAssessment")}))
+    output_block = bool(matched_guardrail_policies({"outputAssessments": trace.get("outputAssessments")}))
+    if input_block and output_block:
+        return "both"
+    if input_block:
+        return "input"
+    if output_block:
+        return "output"
+    return "unknown"
+
+
 def is_internal(ip):
     """Return True only if `ip` is a valid address that falls inside one of the configured
     INTERNAL_CIDRS. Anything malformed or empty is treated as external (fail closed)."""
@@ -251,7 +294,7 @@ def resolve_identity(event, body):
     claims = (event.get("requestContext", {}).get("authorizer") or {}).get("claims")
     if claims:
         user = claims.get("cognito:username") or claims.get("username") or claims.get("sub") or "anonymous"
-        # custom:clearance may be absent (a user seeded without it) -> None signals manifest fallback.
+        # A missing custom:clearance is rejected by the hardened handler.
         clearance = claims.get("custom:clearance") or None
         return user, clearance, "jwt_claims"
     return body.get("user", "anonymous"), None, "request_body"
@@ -272,6 +315,13 @@ def lambda_handler(event, context):
     # hardened mode, the self-asserted body field only in the controls-off baseline (see
     # resolve_identity). `identity_source` is carried into the logs so provenance is auditable.
     user, claim_clearance, identity_source = resolve_identity(event, body)
+    # Defense in depth: a hardened Lambda invocation must carry edge-verified claims.
+    # Never let a missing authorizer context silently fall back to a caller-supplied user.
+    if CONTROLS_ENABLED and identity_source != "jwt_claims":
+        emit({"log_type": "error", "request_id": request_id,
+              "session_id": body.get("session_id", ""),
+              "stage": "identity", "error": "MissingVerifiedIdentity"})
+        return respond(401, {"request_id": request_id, "error": "Verified identity required."})
     if identity_source == "jwt_claims":
         # A human authenticated by JWT is not a service account; attribute activity to the verified
         # user and do not let a body-supplied service_account field re-label the principal.
@@ -301,21 +351,35 @@ def lambda_handler(event, context):
     # around. A structured 503 + log line keeps even the failure path auditable.
     try:
         manifest = get_manifest()
+        # Validate the entire access-control catalog before reading any document.
+        # A mistyped classification must never silently become Public.
+        if not isinstance(manifest.get("documents"), list) or not isinstance(manifest.get("users"), dict):
+            raise ValueError("Malformed corpus manifest")
+        if manifest.get("default_max_clearance", "Public") not in CLASS_ORDER:
+            raise ValueError("Unknown default clearance")
+        if any(doc.get("classification") not in CLASS_ORDER for doc in manifest["documents"]):
+            raise ValueError("Unknown document classification")
+        if any(not isinstance(entry, dict) or entry.get("max_clearance", "Public") not in CLASS_ORDER
+               for entry in manifest["users"].values()):
+            raise ValueError("Unknown manifest user clearance")
     except Exception as e:  # noqa: BLE001 - any S3/parse failure means we cannot authorize anything
         emit({"log_type": "error", "request_id": request_id, "session_id": session_id,
               "stage": "manifest_load", "error": type(e).__name__})
         return respond(503, {"request_id": request_id,
                              "error": "Corpus manifest unavailable; cannot authorize retrievals."})
-    # Resolve the caller's clearance. Precedence: a VERIFIED custom:clearance claim wins (hardened
-    # path — clearance travels in the signed token and can't be self-set); otherwise fall back to the
-    # manifest's per-user table keyed by the (verified or asserted) username; unknown users get the
-    # corpus default (fail closed to Public). An unrecognized claim value also falls back rather than
-    # silently granting nothing.
+    # Hardened mode requires a signed, recognized clearance claim. A missing claim must not
+    # silently inherit access from a manifest entry keyed by the authenticated username.
+    # Controls-off demo mode retains the intentionally weaker manifest-based behavior.
+    if CONTROLS_ENABLED and identity_source == "jwt_claims" and not claim_clearance:
+        emit({"log_type": "error", "request_id": request_id, "session_id": session_id,
+              "stage": "identity_clearance", "error": "MissingClearanceClaim"})
+        return respond(403, {"request_id": request_id, "error": "Clearance claim required."})
+    if claim_clearance and claim_clearance not in CLASS_ORDER:
+        emit({"log_type": "error", "request_id": request_id, "session_id": session_id,
+              "stage": "identity_clearance", "error": "InvalidClearanceClaim"})
+        return respond(403, {"request_id": request_id, "error": "Invalid clearance claim."})
     manifest_clearance = manifest["users"].get(user, {}).get("max_clearance", manifest.get("default_max_clearance", "Public"))
-    if claim_clearance and claim_clearance in CLASS_ORDER:
-        user_clearance = claim_clearance
-    else:
-        user_clearance = manifest_clearance
+    user_clearance = claim_clearance if identity_source == "jwt_claims" else manifest_clearance
     internal = is_internal(source_ip)
 
     # --- Per-layer log emitters (closures capture the shared request/session context) ----------
@@ -328,16 +392,17 @@ def lambda_handler(event, context):
             "request_count": 1, "tokens_used": tokens, "user_agent": user_agent,
         })
 
-    def chat_log(tokens, risk_label, guardrail_action, blocked, reason=""):
+    def chat_log(tokens, risk_label, guardrail_action, blocked, reason="", policies=None):
         # Layer 2: the chat/LLM layer (mirrors chat_logs.json). identity_source records whether the
         # caller's identity/clearance was proven (jwt_claims) or self-asserted (request_body) — the
         # provenance signal that distinguishes a hardened request from the vulnerable baseline.
         emit({
             "log_type": "chat", "request_id": request_id, "session_id": session_id,
             "user": user, "principal": principal, "source_ip": source_ip, "internal_source": internal,
-            "service_account": service_account, "prompt": prompt, "risk_label": risk_label,
+            "service_account": service_account, "prompt_length": len(prompt), "risk_label": risk_label,
             "identity_source": identity_source, "clearance": user_clearance,
             "guardrail_action": guardrail_action, "guardrail_blocked": blocked, "reason": reason,
+            "guardrail_matched_policies": policies or [],
             "tokens_used": tokens,
         })
 
@@ -406,14 +471,27 @@ def lambda_handler(event, context):
     # --- Checkpoint 3: model + guardrail ----------------------------------------------------------
     # Assemble the final user message: the prompt plus only the authorized/clean context chunks.
     user_message = prompt + "\n\nContext:\n" + ("\n\n".join(context_chunks) if context_chunks else "(no authorized documents)")
-    guardrail_action, answer, tokens, guardrail_trace = "none", "", 0, {}
+    guardrail_action, answer, tokens, guardrail_trace = "not_evaluated", "", 0, {}
+    model_status = "failed"
     try:
         answer, tokens, guardrail_action, guardrail_trace = call_bedrock(user_message)
-    except Exception as e:  # noqa: BLE001 - keep the lab resilient if Bedrock access isn't set up
-        # Don't fail the whole request if the model is unreachable — the retrieval decisions above are
-        # still the point of the demo, so surface a friendly message and keep going.
-        answer = f"(model call failed: {type(e).__name__}; retrieval result still shown)"
-        guardrail_action = "error"
+        model_status = "succeeded"
+        emit({"log_type": "model_execution", "request_id": request_id,
+              "session_id": session_id, "stage": "bedrock_converse",
+              "status": "succeeded", "guardrail_action": guardrail_action,
+              "tokens_used": tokens})
+    except Exception as e:  # noqa: BLE001 - AWS client exceptions need a correlated fail-closed result
+        # Never serialize exception messages or model inputs: they may contain credentials or prompts.
+        # AWS service error codes are controlled identifiers, not raw response messages.
+        aws_code = getattr(e, "response", {}).get("Error", {}).get("Code") if isinstance(
+            getattr(e, "response", None), dict) else None
+        error_type = type(e).__name__
+        emit({"log_type": "model_execution", "request_id": request_id,
+              "session_id": session_id, "stage": "bedrock_converse",
+              "status": "failed", "error_type": error_type,
+              "aws_error_code": aws_code if isinstance(aws_code, str) else None,
+              "guardrail_action": "not_evaluated"})
+        guardrail_action = "not_evaluated"
 
     # When the guardrail intervened, log its assessment trace: WHICH policy fired (prompt-attack
     # filter vs. denied topic vs. PII) is the tuning signal — "it intervened" alone isn't actionable.
@@ -421,39 +499,77 @@ def lambda_handler(event, context):
         emit({"log_type": "guardrail_trace", "request_id": request_id, "session_id": session_id,
               "trace": guardrail_trace})
 
+    # Security telemetry is an observation, not an automatic SOC alert.
+    # Keep this event compact and SIEM-friendly; raw trace remains in guardrail_trace.
+    if guardrail_action == "intervened":
+        emit({
+            "log_type": "security_event",
+            "schema_version": "1.0",
+            "event_category": "ai_security",
+            "event_action": "guardrail_intervention",
+            "event_outcome": "blocked",
+            "request_id": request_id,
+            "session_id": session_id,
+            "principal": principal,
+            "identity_source": identity_source,
+            "source_ip": source_ip,
+            "source_ip_simulated": bool(body.get("x_source_ip")),
+            "guardrail_action": "intervened",
+            "matched_policies": matched_guardrail_policies(guardrail_trace),
+            "guardrail_stage": guardrail_assessment_stage(guardrail_trace),
+            "model_status": model_status,
+        })
+
     # Lab affordance: let a scenario force a token count to reproduce the attacker's token burst.
     # Parsed defensively — a malformed value is ignored rather than crashing the request after the
     # (billable) model call already happened.
-    if simulate_tokens is not None:
+    if simulate_tokens is not None and model_status == "succeeded":
         try:
             tokens = int(simulate_tokens)
         except (TypeError, ValueError):
             emit({"log_type": "error", "request_id": request_id, "session_id": session_id,
                   "stage": "simulate_tokens", "error": "not_an_integer"})
 
-    # A guardrail intervention marks the whole request high-risk; the detector uses this signal.
-    high_risk_prompt = guardrail_action == "intervened"
+    # Output-only interventions are not evidence of high-risk user input.
+    guardrail_stage = (guardrail_assessment_stage(guardrail_trace)
+                       if guardrail_action == "intervened" else "none")
+    high_risk_prompt = guardrail_stage in ("input", "both")
     risk_label = "high" if high_risk_prompt else "low"
 
     # --- Checkpoint 4: emit the three correlated layer logs ---------------------------------------
     # All three share request_id + session_id, so a single query can reconstruct the full request path
     # (api_access -> chat -> retrieval) — the end-to-end correlation the incident lacked.
-    api_log(200, tokens)
-    chat_log(tokens, risk_label, guardrail_action, high_risk_prompt)
+    response_status = 200 if model_status == "succeeded" else 503
+    api_log(response_status, tokens)
+    chat_log(tokens, risk_label, guardrail_action, guardrail_action == "intervened",
+             "model_execution_failed" if model_status != "succeeded" else "",
+             matched_guardrail_policies(guardrail_trace) if guardrail_action == "intervened" else [])
     for r in retrievals:
         emit({
             "log_type": "retrieval", "request_id": request_id, "session_id": session_id,
-            "user": user, "principal": principal, "high_risk_prompt": high_risk_prompt, **r,
+            "user": user, "principal": principal, "high_risk_prompt": high_risk_prompt,
+            "guardrail_stage": guardrail_stage, **r,
         })
 
     # --- Response --------------------------------------------------------------------------------
-    # Return the answer plus a transparent account of which docs were returned vs. blocked, so the demo
-    # can show the control decisions without digging through logs.
+    # A failed dependency is not a successful model response. Keep retrieval decisions in
+    # correlated logs while withholding the apparent-success document list from a failed response.
+    if model_status != "succeeded":
+        return respond(503, {"request_id": request_id,
+                             "error": "Model execution unavailable.",
+                             "model_status": "failed",
+                             "guardrail_action": "not_evaluated"})
+    # Guardrail-denied responses must not reveal document identifiers through metadata,
+    # even when the answer text was correctly withheld. Internal structured retrieval
+    # events were already emitted above and remain available for SOC correlation.
+    response_returned = [] if guardrail_action == "intervened" else returned
+    response_blocked = [] if guardrail_action == "intervened" else blocked
     return respond(200, {
+        "model_status": "succeeded",
         "request_id": request_id,
-        "ai_notice": AI_NOTICE,          # EU AI Act Art. 50: disclose AI interaction on every answer
+        "ai_notice": AI_NOTICE,
         "answer": answer,
-        "documents_returned": returned,  # [{document_name, retrieval_score}]
-        "documents_blocked": blocked,    # [{document_name, retrieval_score}]
+        "documents_returned": response_returned,
+        "documents_blocked": response_blocked,
         "guardrail_action": guardrail_action,
     })
