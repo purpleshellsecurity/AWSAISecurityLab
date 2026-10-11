@@ -81,6 +81,14 @@ mkdir -p artifacts
 
 Four cases: missing JWT, malformed JWT, tampered signature of genuine Cognito ID token, and a valid Cognito ID token positive control. Expected HTTP in the current deployed lab: 401/401/403/200. The tampered-signature case was observed rejected at API Gateway with 403; correlate the gateway request ID before attributing a 403 to the authorizer. Each case includes `x_source_ip: 10.12.8.44` to exercise Cognito independently of the separate **simulated** application source-IP checkpoint. This does **not** validate real network perimeter enforcement. Failed Cognito login is a setup error, **not** evidence of edge enforcement. The evidence file holds request metadata and gateway correlation identifiers, never JWTs or secrets.
 
+Immediately after a fresh deployment, API Gateway may briefly return `403` while the API-key and
+usage-plan association propagates. `replay.py` retries only the explicit `auth_case: "valid"` signed
+JWT plus `x-api-key` positive control, with fixed 1/2/4-second backoff. It never retries missing,
+malformed, tampered, expired, or other negative-control requests. Output and result JSON classify
+that control as `VERIFIED SUCCESS`, an exhausted retry as `READINESS TIMEOUT / INCONCLUSIVE`, and
+non-eligible 401/403 results as `AUTHORIZATION DENIAL`. This classification does not attribute a
+403 to a particular AWS component.
+
 For genuine expiry testing, privately capture a real Cognito ID token from the disposable lab user pool to a local owner-only file (permissions `0600`). Once the original, correctly signed token has actually expired (configured ID token validity: one hour), run:
 
 ```bash
@@ -94,7 +102,7 @@ Do not commit, print, paste or upload tokens. Modifying the `exp` claim without 
 
 ### Independent edge authorization attribution
 
-HTTP 403 and a Gateway request ID do **not** on their own establish which component rejected a request. The API Gateway access-log format now records the gateway error and Lambda integration status, without JWTs or request bodies. Deploy this logging change before collecting a new campaign:
+HTTP 403 and a Gateway request ID do **not** on their own establish which component rejected a request. The API Gateway access-log format records the gateway error and Lambda integration status, without JWTs or request bodies, **only when the account/Region already has an externally managed API Gateway CloudWatch role**. The isolated runner deliberately uses `manage_account_region_singletons=false`, so log correlation is not guaranteed; it never creates or changes that singleton. Use a pre-existing account-managed role before collecting correlation evidence:
 
 ```bash
 terraform -chdir=terraform plan -var="controls_enabled=true"

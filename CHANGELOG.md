@@ -5,6 +5,14 @@ All notable changes to this project are documented here. Format follows
 
 ## [Unreleased]
 
+### Fixed
+- The replay's explicit signed-JWT plus API-key positive control now retries only a transient
+  post-create 403 with bounded 1/2/4-second backoff, avoiding false authorization-denial evidence
+  while API Gateway usage-plan propagation completes. Negative credential controls never retry, and
+  replay evidence explicitly distinguishes verified success, authorization denial, and exhausted
+  readiness timeout/inconclusive results. API Gateway request-log correlation remains conditional
+  on a pre-existing externally managed account/Region CloudWatch role.
+
 ### Added
 - **GRC layer (`docs/compliance/`).** A governance layer above the existing controls: a
   risk register (mitigate/accept decisions with role-based owners), a remediation register

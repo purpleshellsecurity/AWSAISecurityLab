@@ -45,6 +45,9 @@ DEFAULT_SCENARIO = os.path.join(SCENARIO_DIR, "99_incident_full.json")  # the fu
 # Only these keys are forwarded from a scenario entry into the request body; anything else in the
 # entry (e.g. "phase") is metadata for the replay tool, not the API.
 PASSTHROUGH = ("user", "service_account", "x_source_ip", "session_id", "prompt", "simulate_tokens")
+# API Gateway can briefly return 403 while a newly created API key/usage-plan association
+# propagates. Only the explicit signed-JWT positive control is eligible for this retry.
+POST_CREATE_READINESS_BACKOFF_SECONDS = (1, 2, 4)
 
 
 def list_scenarios():
@@ -206,6 +209,46 @@ def post(url, key, body, token=None):
         return e.code, parse_response(e.read(), e.headers)
 
 
+def is_readiness_retry_eligible(auth_case, client_id, key, token, expected_status):
+    """Return whether this is the explicit authenticated positive control.
+
+    Negative credential tests and ordinary scenario traffic must observe their first response
+    unchanged. The API key is always required by the API method, and the valid auth_case obtains
+    a Cognito ID token through auth_test_token before this predicate is evaluated.
+    """
+    return (
+        auth_case == "valid"
+        and bool(client_id)
+        and bool(key)
+        and bool(token)
+        and expected_status == 200
+    )
+
+
+def post_with_readiness_retry(url, key, body, token, retry_eligible, sleep=time.sleep):
+    """Retry a transient post-create 403 for the explicit authorized positive control only."""
+    status, response = post(url, key, body, token)
+    attempts = 1
+    for delay in POST_CREATE_READINESS_BACKOFF_SECONDS:
+        if not retry_eligible or status != 403:
+            break
+        sleep(delay)
+        status, response = post(url, key, body, token)
+        attempts += 1
+    return status, response, attempts
+
+
+def classify_request_outcome(status, retry_eligible, attempts):
+    """Classify edge observations without attributing a 403 to a specific AWS component."""
+    if retry_eligible and status == 200:
+        return "VERIFIED SUCCESS"
+    if retry_eligible and status == 403 and attempts > 1:
+        return "READINESS TIMEOUT / INCONCLUSIVE"
+    if status in (401, 403):
+        return "AUTHORIZATION DENIAL"
+    return "OBSERVED"
+
+
 def verify_per_request_detections(requests, results, findings):
     """Compare exact finding sets for each request, including negative controls.
 
@@ -317,15 +360,22 @@ def main():
         except (ValueError, OSError) as exc:
             print(f"ERROR: identity test setup failed for request {i}: {exc}", file=sys.stderr)
             return 2
-        status, resp = post(url, key, body, token)
-        fired += 1
         expectation_key = "expected_status_hardened" if client_id else "expected_status_baseline"
         expected_status = entry.get(expectation_key)
+        retry_eligible = is_readiness_retry_eligible(
+            auth_case, client_id, key, token, expected_status)
+        status, resp, attempts = post_with_readiness_retry(
+            url, key, body, token, retry_eligible)
+        fired += 1
+        outcome_classification = classify_request_outcome(status, retry_eligible, attempts)
         results.append({
             "scenario": os.path.basename(args.scenario), "index": i,
             "phase": entry.get("phase", ""), "auth_case": auth_case,
             "mode": "hardened" if client_id else "baseline",
             "http_status": status, "expected_http_status": expected_status,
+            "outcome_classification": outcome_classification,
+            "readiness_retry_eligible": retry_eligible,
+            "attempts": attempts,
             "request_id": resp.get("request_id"),
             "api_gateway_request_id": resp.get("_api_gateway_request_id"),
             "api_gateway_extended_id": resp.get("_api_gateway_extended_id"),
@@ -360,18 +410,19 @@ def main():
             guardrail += 1
         if rb:
             blocked_doc += 1
-        outcome = "OBSERVED"
+        outcome = outcome_classification
         if args.assert_expected:
             if type(expected_status) is not int:
-                outcome = "INCONCLUSIVE"
+                outcome += " / EXPECTATION INCONCLUSIVE"
             elif status == expected_status:
-                outcome = "HTTP MATCH"
+                outcome += " / HTTP MATCH"
             else:
-                outcome = "HTTP MISMATCH"
+                outcome += " / HTTP MISMATCH"
         if ga == "intervened":
             outcome += " / GUARDRAIL"
         principal = body.get("user") or body.get("service_account") or "-"
-        print(f"{i:>2}  {principal[:18]:<18} {status:<5} {len(rr):>8} {len(rb):>8}  {outcome}")
+        retry_note = f" after {attempts} attempts" if attempts > 1 else ""
+        print(f"{i:>2}  {principal[:18]:<18} {status:<5} {len(rr):>8} {len(rb):>8}  {outcome}{retry_note}")
         if args.verbose:
             print(f"      Phase: {phase or '-'} | Request ID ({rid_origin}): {rid}")
             if rr:
@@ -383,7 +434,10 @@ def main():
             if status == 401:
                 print("      JWT rejected at edge; app detectors not exercised")
             elif status == 403:
-                print("      HTTP 403 origin requires correlated AWS logs")
+                if retry_eligible and attempts > 1:
+                    print("      Post-create readiness retries exhausted; result is inconclusive")
+                else:
+                    print("      Authorization denial; exact 403 origin requires correlated AWS logs")
         time.sleep(args.delay)  # pace requests so the log timeline reads naturally
 
     # Emit observations without credential or prompt values. HTTP status alone is NOT

@@ -177,6 +177,64 @@ def test_missing_valid_cognito_token_fails_setup_not_fake_401(replay, monkeypatc
         replay.auth_test_token("tampered", "client", "c.jones", "password", {})
 
 
+@pytest.mark.parametrize("auth_case,client_id,key,token,expected,eligible", [
+    ("valid", "client", "key", "token", 200, True),
+    ("tampered", "client", "key", "token", 200, False),
+    ("valid", None, "key", "token", 200, False),
+    ("valid", "client", "", "token", 200, False),
+    ("valid", "client", "key", None, 200, False),
+    ("valid", "client", "key", "token", 403, False),
+])
+def test_readiness_retry_requires_explicit_authorized_positive_control(
+    replay, auth_case, client_id, key, token, expected, eligible
+):
+    assert replay.is_readiness_retry_eligible(
+        auth_case, client_id, key, token, expected) is eligible
+
+
+def test_readiness_retry_is_bounded_and_uses_backoff(replay, monkeypatch):
+    responses = iter([
+        (403, {"_api_gateway_request_id": "first"}),
+        (403, {"_api_gateway_request_id": "second"}),
+        (403, {"_api_gateway_request_id": "third"}),
+        (200, {"request_id": "ready"}),
+    ])
+    delays = []
+    monkeypatch.setattr(replay, "post", lambda *args: next(responses))
+    status, response, attempts = replay.post_with_readiness_retry(
+        "https://example.test", "key", {}, "token", True, sleep=delays.append)
+    assert (status, response, attempts) == (200, {"request_id": "ready"}, 4)
+    assert delays == list(replay.POST_CREATE_READINESS_BACKOFF_SECONDS)
+
+
+@pytest.mark.parametrize("status", [401, 403])
+def test_readiness_retry_does_not_retry_negative_controls(replay, monkeypatch, status):
+    calls = []
+    monkeypatch.setattr(
+        replay, "post",
+        lambda *args: calls.append(args) or (status, {"_api_gateway_request_id": "negative"}),
+    )
+    observed, _, attempts = replay.post_with_readiness_retry(
+        "https://example.test", "key", {}, "invalid-token", False)
+    assert observed == status
+    assert attempts == 1
+    assert len(calls) == 1
+
+
+@pytest.mark.parametrize("status,retry_eligible,attempts,classification", [
+    (200, True, 1, "VERIFIED SUCCESS"),
+    (403, True, 4, "READINESS TIMEOUT / INCONCLUSIVE"),
+    (401, False, 1, "AUTHORIZATION DENIAL"),
+    (403, False, 1, "AUTHORIZATION DENIAL"),
+    (500, False, 1, "OBSERVED"),
+])
+def test_request_outcome_classification(
+    replay, status, retry_eligible, attempts, classification
+):
+    assert replay.classify_request_outcome(
+        status, retry_eligible, attempts) == classification
+
+
 def test_jwt_boundary_scenario_keeps_network_gate_out_of_positive_control():
     scenario_path = pathlib.Path(__file__).resolve().parents[1] / "demo" / "scenarios" / "08_jwt_boundary.json"
     scenario = json.loads(scenario_path.read_text())
@@ -187,6 +245,36 @@ def test_jwt_boundary_scenario_keeps_network_gate_out_of_positive_control():
     assert cases["tampered"]["expected_status_hardened"] == 403
     assert cases["missing"]["expected_status_hardened"] == 401
     assert cases["malformed"]["expected_status_hardened"] == 401
+
+
+def test_valid_positive_control_retries_transient_post_create_403(
+    replay, monkeypatch, tmp_path, capsys
+):
+    scenario = tmp_path / "positive.json"
+    scenario.write_text(json.dumps({"requests": [{
+        "phase": "jwt-valid-positive",
+        "auth_case": "valid",
+        "user": "c.jones",
+        "prompt": "hello",
+        "expected_status_hardened": 200,
+    }]}))
+    responses = iter([(403, {}), (200, {"request_id": "ready"})])
+    output = tmp_path / "result.json"
+    monkeypatch.setattr(replay, "auth_test_token", lambda *args: "signed-id-token")
+    monkeypatch.setattr(replay, "post", lambda *args: next(responses))
+    monkeypatch.setattr(replay.time, "sleep", lambda *args: None)
+    monkeypatch.setattr(sys, "argv", [
+        "replay.py", "--scenario", str(scenario), "--url", "https://example.test",
+        "--key", "key", "--client-id", "client", "--assert-expected",
+        "--results-json", str(output), "--no-detection-check",
+    ])
+    assert replay.main() == 0
+    result = json.loads(output.read_text())["requests"][0]
+    assert result["outcome_classification"] == "VERIFIED SUCCESS"
+    assert result["readiness_retry_eligible"] is True
+    assert result["attempts"] == 2
+    assert "VERIFIED SUCCESS / HTTP MATCH after 2 attempts" in capsys.readouterr().out
+
 
 
 @pytest.mark.parametrize("model_status,expected_exit", [
