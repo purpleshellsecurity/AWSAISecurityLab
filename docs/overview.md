@@ -35,8 +35,10 @@ detection logic:
 
 ## 6. Deployment
 Everything is **Terraform** (infrastructure-as-code): `terraform apply` builds it,
-`terraform destroy` removes it. Attack scenarios are replayed against the live API to validate each
-control.
+`terraform destroy` removes it. Attack scenarios can be replayed against a live API to collect
+manual evidence for a bounded request path. Source/unit checks show intended behavior; they do not
+prove live AWS outcomes. Deployment and live testing require prior approval from the account owner;
+see the root [testing runbook](../TESTING.md) for the evidence boundary and expected observations.
 
 ---
 

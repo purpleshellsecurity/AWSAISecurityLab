@@ -177,6 +177,12 @@ resource "aws_api_gateway_stage" "prod" {
       status     = "$context.status"
       latency    = "$context.responseLatency"
       userAgent  = "$context.identity.userAgent"
+      # Gateway-owned failure/integration evidence. Empty or '-' means no value available.
+      # Do NOT record the Authorization header, JWT, request body or user credentials.
+      gateway_error      = "$context.error.message"
+      gateway_error_type = "$context.error.responseType"
+      integration_status = "$context.integration.status"
+      integration_error  = "$context.integration.error"
     })
   }
 }

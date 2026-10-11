@@ -1,0 +1,38 @@
+{
+  "name": "JWT boundary negative and positive controls",
+  "description": "Hardened Cognito-only tests. Missing/malformed JWTs are rejected with 401; a signature-tampered JWT is rejected at the API Gateway boundary (403 in this lab); a genuine Cognito ID token should reach the application and return 200. All requests include the explicit internal-source LAB simulation so the positive test is not rejected by the separate Lambda source-IP checkpoint. No token strings are stored.",
+  "requests": [
+    {
+      "phase": "jwt-missing",
+      "auth_case": "missing",
+      "user": "c.jones",
+      "prompt": "How do I export a session report?",
+      "expected_status_hardened": 401,
+      "x_source_ip": "10.12.8.44"
+    },
+    {
+      "phase": "jwt-malformed",
+      "auth_case": "malformed",
+      "user": "c.jones",
+      "prompt": "How do I export a session report?",
+      "expected_status_hardened": 401,
+      "x_source_ip": "10.12.8.44"
+    },
+    {
+      "phase": "jwt-tampered",
+      "auth_case": "tampered",
+      "user": "c.jones",
+      "prompt": "How do I export a session report?",
+      "expected_status_hardened": 403,
+      "x_source_ip": "10.12.8.44"
+    },
+    {
+      "phase": "jwt-valid-positive",
+      "auth_case": "valid",
+      "user": "c.jones",
+      "prompt": "How do I export a session report?",
+      "expected_status_hardened": 200,
+      "x_source_ip": "10.12.8.44"
+    }
+  ]
+}

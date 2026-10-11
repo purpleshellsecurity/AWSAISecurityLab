@@ -45,7 +45,7 @@ Two paths, and in each the point is *where* the work happens:
 | Least-privilege IAM | LLM06 | `iam.tf` | Lambda role scoped to one inference profile + the corpus prefix + one guardrail + one secret |
 | Secrets out of corpus | LLM07 / AML.T0055 | `secrets.tf` + corpus design | Service creds in Secrets Manager (KMS), not in documents |
 | Correlation logging | — | `src/chat/handler.py` (`emit`) + API GW access logs | One `request_id` across `api_access`/`chat`/`retrieval` records |
-| Detections | — | `src/detector/handler.py` + `detections.tf` | 4 detections → custom metrics → alarms → SNS; rolling token baseline in DynamoDB |
+| Detections | — | `src/detector/handler.py` + `detections.tf` | 3 detections → custom metrics → alarms → SNS; rolling token baseline in DynamoDB |
 | Encryption / audit baseline | — | `kms.tf`, `logging.tf` | CMK on corpus/logs/SNS; CloudTrail; Bedrock invocation logging |
 
 The `controls_enabled` variable gates the guardrail, the retrieval-authz enforcement, the edge-IP
@@ -140,7 +140,7 @@ detector emits a structured `detection` record per finding plus a custom metric 
 | LLM01 jailbreak | AML.T0054, T0065 | `05_jailbreak` | Guardrail |
 | LLM07 system-prompt leak | AML.T0056, T0069 | `06_system_prompt_extraction` | retrieval authz + Guardrail |
 | LLM02 RAG abuse / exfil | AML.T0057, T0055 | `03_data_exfiltration` | retrieval authz |
-| LLM06 broken access ctrl | AML.T0012, T0040 | `04_account_compromise` | network + token detection |
+| LLM06 broken access ctrl | AML.T0012, T0040 | `08_jwt_boundary` | network + token detection |
 | LLM06 forged identity | AML.T0012 | hardened `replay.py` / `get_token.sh` | JWT authentication (claims, not body) |
 | LLM01 indirect injection | AML.T0051.001, T0070 | `07_indirect_injection` | injection scanner + detection |
 

@@ -1,12 +1,28 @@
 {
   "name": "Baseline normal usage",
-  "description": "Legitimate employees asking in-scope questions from internal IPs. Nothing should be blocked; no detections should fire. Run this first to establish a clean baseline (and to seed token baselines).",
+  "description": "Normal employee traffic. Retrieval authorization may block documents above the caller's clearance. No security detector findings are expected.",
   "requests": [
-    { "phase": "normal", "user": "c.jones", "x_source_ip": "10.12.8.44", "session_id": "sess-1018",
-      "prompt": "How do I export a session report?" },
-    { "phase": "normal", "user": "a.williams", "x_source_ip": "10.12.8.51", "session_id": "sess-1055",
-      "prompt": "What are the supported browsers and the support triage severity levels?" },
-    { "phase": "normal", "user": "d.brown", "x_source_ip": "10.12.8.60", "session_id": "sess-1040",
-      "prompt": "What does the Benefits FAQ 2026 say about parental leave?" }
-  ]
+    {
+      "phase": "normal",
+      "user": "c.jones",
+      "x_source_ip": "10.12.8.44",
+      "session_id": "sess-1018",
+      "prompt": "How do I export a session report?"
+    },
+    {
+      "phase": "normal",
+      "user": "a.williams",
+      "x_source_ip": "10.12.8.51",
+      "session_id": "sess-1055",
+      "prompt": "What are the supported browsers and the support triage severity levels?"
+    },
+    {
+      "phase": "normal",
+      "user": "d.brown",
+      "x_source_ip": "10.12.8.60",
+      "session_id": "sess-1040",
+      "prompt": "What does the Benefits FAQ 2026 say about parental leave?"
+    }
+  ],
+  "expected_detections": []
 }

@@ -5,6 +5,29 @@ states **what it proves**, so by the end you've seen every control engage and kn
 
 Run all commands from the repo root. A results table to fill in is at the bottom.
 
+## Before manual E2E testing
+
+Static checks in Phase 0 are local source evidence only. Phases 1–6 are a **bounded manual E2E
+path** that creates, exercises, and destroys AWS resources; run them only after the account owner
+approves the deployment and test scope. Use a dedicated lab account or other explicitly authorized
+disposable environment. Never use controls-off mode to test a shared system or real data.
+
+For a same-account isolated deployment, use `scripts/lab.py` with a new lowercase, hyphenated
+identifier. It derives an isolated prefix/environment, keeps state in the ignored
+`.lab-state/<id>/terraform.tfstate` path, always disables account/Region singleton management, and
+does not add an alarm-email subscription. Do not set
+`manage_account_region_singletons=true` in a shared account.
+
+| Observe | Minimum evidence | Does not prove |
+|---|---|---|
+| Control path | replay result plus request-correlated `api_access`, `chat`, and `retrieval` logs | Detector execution or notification delivery |
+| Detector finding | matching `detection` record for the same `request_id` | Metric, alarm, or SNS recipient delivery |
+| Alerting path | custom-metric activity, alarm-history transition, and separately verified subscription/recipient evidence | A release decision or general production readiness |
+
+Record the authorized environment, deployed commit, request IDs, time window, and evaluator
+decision. Mark missing or ambiguous evidence **INCONCLUSIVE**, not passed. For detector-specific
+predicate and delivery limits, use [`docs/soc-detection-validation.md`](docs/soc-detection-validation.md).
+
 **Legend — how to read `replay.py` output:**
 
 | In the output | Means |
@@ -40,16 +63,31 @@ caught a poisoned doc · `leaked_unauthorized` = controls off, a doc escaped.
 ## Phase 1 — Deploy & smoke
 
 ```bash
-./scripts/preflight.sh                     # all green; submit the Bedrock form if it flags it
-terraform -chdir=terraform init            # first time only
-terraform -chdir=terraform apply           # review the plan, type "yes"
+python3 scripts/lab.py plan sandbox-20261010  # preflight + reviewed saved local plan
+python3 scripts/lab.py up sandbox-20261010    # apply that isolated local plan
 ```
+
+For an isolated same-account lab, review the generated plan before applying it:
+
+```bash
+python3 scripts/lab.py plan sandbox-20261010
+python3 scripts/lab.py up sandbox-20261010
+python3 scripts/lab.py verify sandbox-20261010
+# Only when the lab is no longer needed:
+python3 scripts/lab.py down sandbox-20261010 --confirm sandbox-20261010
+```
+
+`down` preserves `.lab-state/<id>/terraform.tfstate` if Terraform destroy fails, so the same state
+can be used for investigation or a later retry. The runner rejects reserved/default identifiers and
+never uses `terraform/terraform.tfstate`.
 
 | # | Run | Expect |
 |---|---|---|
 | P1 | (after apply) `terraform -chdir=terraform output api_invoke_url` | a `https://...execute-api...` URL |
 | P2 | `./scripts/preflight.sh` | `Lab is DEPLOYED` + `Bedrock model reachable` |
 | P3 | `./demo/replay.py --scenario demo/scenarios/01_baseline_normal.json` | every line `200 returned=[...]`, no blocks |
+
+**Machine-readable HTTP evidence:** `replay.py --assert-expected` checks each scenario's mode-specific `expected_status_hardened` / `expected_status_baseline` field and exits nonzero for a missing or mismatched status. `--results-json artifacts/name.json` stores status, request ID, guardrail action, and blocked/returned document identifiers without storing prompt text or credentials. Store test evidence securely and do not commit it. HTTP assertions alone do not prove retrieval authorization, detector execution, or notification delivery; those require independent correlated logs and AWS observations.
 
 **Proves:** the stack deploys cleanly and a legitimate user gets normal answers. This is your control
 group — everything after this is "does the system stop the *bad* stuff while still allowing this?"
@@ -72,12 +110,8 @@ group — everything after this is "does the system stop the *bad* stuff while s
 - **Verify deeper:** the `chat` log record shows `guardrail_action: "intervened"`, `risk_label: "high"`.
 - **Proves:** manipulative prompts are caught at the model layer; the assistant doesn't follow them.
 
-### T3 — Network / identity (service account from external IP) · OWASP LLM06 · ATLAS T0012
-- **Run:** `./demo/replay.py --scenario demo/scenarios/04_account_compromise.json`
-- **Expect:** the `198.51.100.23` request returns `403 network-blocked`.
-- **Verify deeper:** `api_access` log record shows `internal_source: false`, `http_status: 403`,
-  `reason: "non_internal_source"`.
-- **Proves:** a stolen credential used from outside the trusted range never reaches the app.
+### T3 — Authentication boundary (hardened mode) · OWASP LLM06 · ATLAS T0012
+- **Separate real network-perimeter test:** restrict `allowed_edge_cidrs` to an approved test source, invoke from a different real source IP, and verify the WAF/API Gateway deny and edge access logs. The request-body `x_source_ip` field is **only a simulation** and cannot prove actual network-origin enforcement.
 
 ### T4 — Jailbreak · 🤖 needs Bedrock · OWASP LLM01 · ATLAS T0054
 - **Run:** `./demo/replay.py --scenario demo/scenarios/05_jailbreak.json`
@@ -100,7 +134,7 @@ group — everything after this is "does the system stop the *bad* stuff while s
 
 ## Phase 3 — Detection tests
 
-After the Phase 2 runs, wait ~30–60s for the log subscription to reach the detector, then:
+After the Phase 2 runs, allow time for log delivery, then:
 
 ```bash
 ./demo/show_detections.sh
@@ -108,19 +142,17 @@ After the Phase 2 runs, wait ~30–60s for the log subscription to reach the det
 
 | # | Detection | Triggered by | Expect in output |
 |---|---|---|---|
-| X1 | `service-account-external-source` (High) | T3 | a `detection` record for `enso-rag-svc` @ `198.51.100.23` |
-| X2 | `token-volume-deviation` (Medium) | T3 (the 120k-token burst) | a `detection` record, `tokens_used` ≫ `baseline` |
-| X3 | `indirect-injection` (High) | T6 | a `detection` record for the poisoned doc |
+| X1 | `token-volume-deviation` (Medium) | Baseline-only replay with `--no-auth` (120k-token burst) | a `detection` record, `tokens_used` ≫ `baseline`; **not expected from hardened T3** |
+| X2 | `indirect-injection` (High) | T6 | a `detection` record for the poisoned doc |
 
 Also check **CloudWatch → Alarms**: the matching alarms move to **In alarm**. Note alarms are
 *momentary* — they evaluate a 1-minute window and flip back to **OK** once the attack stops, so you
-may not see all four in ALARM at the same instant. The detector **log** (`show_detections.sh`) is the
+may not see all three in ALARM at the same instant. The detector **log** (`show_detections.sh`) is the
 reliable record of what fired.
 
-**Proves:** detection is decoupled from enforcement — the system not only blocks attacks, it *notices*
-them and raises an alert a human can act on.
+**Proves only when the matching detector logs are observed:** the detector recognized those log records. A finding log does **not** prove CloudWatch metric delivery, SNS notification, or receipt by a human. Run baseline-only token tests in a dedicated lab account; restore hardened mode afterward. Do not treat a hardened-mode 401 as a successful X1/X2 result.
 
-> The fourth detection, `sensitive-retrieval-anomaly`, fires only when a sensitive doc **actually
+> The sensitive-retrieval detection, `sensitive-retrieval-anomaly`, fires only when a sensitive doc **actually
 > reaches the model/user** — either it **leaked** (`action: leaked_unauthorized`, seen in Phase 5) or
 > it was **retrieved by an authorized user during a flagged (high-risk) session**. It deliberately
 > does **not** fire on `blocked_unauthorized` or `quarantined_injection` docs — those are attempts the
@@ -186,14 +218,14 @@ Lambdas, and API Gateway are gone — or trust the `Destroy complete!` count.)
 | P1–P3 | deploys; normal user allowed | ☐ |
 | T1 | retrieval-layer authorization blocks restricted docs | ☐ |
 | T2 | guardrail blocks prompt injection | ☐ |
-| T3 | external-source request blocked at the network | ☐ |
 | T4 | guardrail blocks jailbreaks | ☐ |
 | T5 | system-prompt extraction blocked | ☐ |
 | T6 | poisoned document quarantined (injection scan) | ☐ |
-| X1–X3 | detections fire + alarms trip | ☐ |
+| X1–X3 | distinct detector logs confirmed in appropriate modes; delivery independently checked | ☐ |
 | Phase 4 | one request traced across all layers | ☐ |
 | N1–N2 | controls off → attack succeeds + leak detected | ☐ |
 | Phase 6 | full teardown, no cost | ☐ |
 
-When every box is checked, you've exercised every control, both with and without enforcement, and
-seen the detections and correlated logs — i.e. you've validated the whole solution end to end.
+Completed boxes document only the observations listed for those tests. A manual E2E run does not
+replace separate evidence for notification delivery, real network-origin enforcement, deployment
+approval, or production/release readiness.

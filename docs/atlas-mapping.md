@@ -31,8 +31,8 @@ scenario is traceable to a real, named adversary technique.
 | AML.T0069(.002) | Discover LLM System Information / System Prompt | `06_system_prompt_extraction.json` | retrieval authz + Guardrail |
 | AML.T0057 | LLM Data Leakage | `03_data_exfiltration.json` | retrieval authz + Guardrail PII |
 | AML.T0055 | Unsecured Credentials | `03_data_exfiltration.json` | retrieval authz (secrets runbook) |
-| AML.T0012 | Valid Accounts | `04_account_compromise.json` | network + detection |
-| AML.T0040 / AML.T0024 | Inference API Access / Exfiltration via Inference API | `04_account_compromise.json` | token-deviation detection |
+| AML.T0012 | Valid Accounts | `08_jwt_boundary.json` | gateway authentication and network prevention |
+| AML.T0040 / AML.T0024 | Inference API Access / Exfiltration via Inference API | `03_data_exfiltration.json` | retrieval authorization and token deviation |
 | AML.T0051.001 | Indirect Prompt Injection | `07_indirect_injection.json` | retrieval-time injection scanner + detection |
 | AML.T0070 | RAG Poisoning | `07_indirect_injection.json` | retrieval-time injection scanner + detection |
 | AML.T0053 | AI Agent Tool Invocation | _(out of scope — no agent/tools)_ | — |

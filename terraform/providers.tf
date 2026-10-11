@@ -24,8 +24,9 @@ provider "aws" {
     tags = {
       # Project/Source identify these resources as belonging to this lab and
       # make cleanup / auditing unambiguous.
-      Project = "ai-rag-security-lab"
-      Source  = "rag-incident-reproduction"
+      Project     = "ai-rag-security-lab"
+      Source      = "rag-incident-reproduction"
+      Environment = var.environment_id
       # Owner establishes accountability - who to contact if a resource behaves
       # unexpectedly or needs to be torn down.
       Owner = var.owner

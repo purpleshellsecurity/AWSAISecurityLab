@@ -36,8 +36,9 @@ locals {
   # The custom CloudWatch namespace the detector publishes to. Defined ONCE here
   # because three things must agree on it or the pipeline silently breaks: the
   # detector's IAM condition (iam.tf), the Lambda's METRIC_NAMESPACE env var,
-  # and the alarms' namespace (detections.tf). One local = one contract.
-  detections_namespace = "AIRagLab/Detections"
+  # and the alarms' namespace (detections.tf). The environment suffix prevents
+  # parallel lab deployments in one account/Region from sharing metric streams.
+  detections_namespace = "AIRagLab/Detections/${var.environment_id}"
 
   # Bedrock invoke targets the Lambda role is scoped to (least privilege). For a cross-region
   # inference profile, IAM needs InvokeModel on the profile ARN AND on the underlying foundation

@@ -3,18 +3,18 @@
 # =============================================================================
 # Detection & alerting.
 # The detector Lambda consumes the chat Lambda's structured logs via a subscription filter and runs
-# the four detections, publishing a custom metric per detection. CloudWatch alarms on
+# the three detections, publishing a custom metric per detection. CloudWatch alarms on
 # those metrics notify SNS. The per-principal token baseline lives in DynamoDB (rolling baseline,
 # deliberately not a static threshold).
 #
 # The full detection wiring, end to end:
-#   chat log group --(subscription filter, near-real-time)--> detector Lambda --(runs 4 detections,
+#   chat log group --(subscription filter, near-real-time)--> detector Lambda --(runs 3 detections,
 #   emits a custom CloudWatch metric per hit)--> CloudWatch metric alarm per detection --(alarm/ok
 #   action)--> SNS topic --> email.
 # This is the "detect & respond" complement to the preventive controls (WAF/Guardrail/authz). Even
-# when prevention holds, these detections surface abuse attempts so a human is alerted. The four
-# detections map to the incident's attack patterns: (1) external service-account use, (2) sensitive-
-# doc access anomalies, (3) indirect/RAG-borne injection, and (4) token-volume spikes.
+# when prevention holds, these detections surface abuse attempts so a human is alerted. The three
+# detections cover sensitive retrieval anomalies, indirect/RAG-borne injection,
+# and token-volume spikes.
 # -----------------------------------------------------------------------------
 
 # ---------- SNS alarm topic ----------
@@ -34,7 +34,7 @@ resource "aws_sns_topic_subscription" "email" {
   endpoint  = var.alarm_email
 }
 
-# ---------- Rolling baseline state for Detection 4 ----------
+# ---------- Rolling baseline state for Detection 3 ----------
 # Stores each principal's rolling token-usage baseline. Using a learned per-principal baseline
 # (rather than one global static threshold) is the whole point: it flags a caller deviating from
 # ITS OWN normal, catching low-and-slow abuse a fixed number would miss and cutting false positives
@@ -47,6 +47,12 @@ resource "aws_dynamodb_table" "baseline" {
   attribute {
     name = "principal"
     type = "S"
+  }
+
+  # Event receipts use expires_at. Baseline principal rows have no TTL and persist.
+  ttl {
+    attribute_name = "expires_at"
+    enabled        = true
   }
 
   # Customer-managed KMS encryption at rest: the baseline reveals per-principal usage patterns, so
@@ -67,7 +73,7 @@ data "archive_file" "detector" {
 }
 
 # The detector function: invoked by CloudWatch Logs on every chat log batch, it parses the structured
-# events, runs the four detections, and emits a custom metric per detection hit. Its role
+# events, runs the three detections, and emits a custom metric per detection hit. Its role
 # (aws_iam_role.detector) grants only what it needs: read the baseline table, put metrics, publish SNS.
 resource "aws_lambda_function" "detector" {
   function_name = "${local.prefix}-detector"
@@ -87,15 +93,12 @@ resource "aws_lambda_function" "detector" {
     variables = {
       BASELINE_TABLE = aws_dynamodb_table.baseline.name
       SNS_TOPIC_ARN  = aws_sns_topic.alarms.arn
-      # How many times over its own baseline a principal's token usage must jump to trip Detection 4.
+      # How many times over its own baseline a principal's token usage must jump to trip Detection 3.
       TOKEN_DEVIATION_FACTOR = tostring(var.token_deviation_factor)
       METRIC_NAMESPACE       = local.detections_namespace
-      # Principals allowed to be high-volume (Detection 4 allowlist). Prevents the legitimate bulk
+      # Principals allowed to be high-volume (Detection 3 allowlist). Prevents the legitimate bulk
       # indexer from constantly tripping the token-spike detection.
       HIGH_VOLUME_ALLOWLIST = join(",", var.high_volume_allowlist)
-      # Known service accounts (Detection 1). Mirrors the incident's accounts.
-      # Detection keys on these identities to spot misuse of a real service account.
-      SERVICE_ACCOUNTS = join(",", var.service_accounts)
     }
   }
 
@@ -129,10 +132,9 @@ resource "aws_cloudwatch_log_subscription_filter" "chat_to_detector" {
 # alarms in one place — add a detection here + in the Lambda and the alarm is created automatically.
 locals {
   detections = {
-    "service-account-external-source" = "ServiceAccountExternalSource" # Detection 1: known svc acct from external IP
-    "sensitive-retrieval-anomaly"     = "SensitiveRetrievalAnomaly"    # Detection 2: unusual access to sensitive docs
-    "indirect-injection"              = "IndirectInjection"            # Detection 3: injection payload found in retrieved content
-    "token-volume-deviation"          = "TokenSpike"                   # Detection 4: token usage above learned baseline
+    "sensitive-retrieval-anomaly" = "SensitiveRetrievalAnomaly" # Detection 1: unusual access to sensitive docs
+    "indirect-injection"          = "IndirectInjection"         # Detection 2: injection payload found in retrieved content
+    "token-volume-deviation"      = "TokenSpike"                # Detection 3: token usage above learned baseline
   }
 }
 
@@ -157,7 +159,7 @@ resource "aws_cloudwatch_metric_alarm" "detections" {
 }
 
 # ---------- Dead-man switch for the detection pipeline itself ----------
-# All four detections share one single point of failure: the detector Lambda. If a bad deploy or a
+# All three detections share one single point of failure: the detector Lambda. If a bad deploy or a
 # persistent exception kills it, no metrics are published — and because the detection alarms treat
 # missing data as notBreaching (correct for "no detections = healthy"), a dead detector looks
 # EXACTLY like a quiet, healthy system. This alarm watches the function's own Errors metric so the
