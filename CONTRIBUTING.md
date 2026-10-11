@@ -45,11 +45,10 @@ python -c "import json,glob;[json.load(open(f)) for f in glob.glob('demo/scenari
 python -m pytest tests/ -q   # unit tests for both Lambdas (pip install pytest boto3)
 ```
 
-## CI runner isolation
+## CI runner safety
 
-CI runs on the dedicated production-scoped self-hosted runner. Pushes and pull requests from
-branches in this repository run validation; pull requests from forks are intentionally skipped so
-untrusted fork code cannot execute on the self-hosted runner.
+CI runs on GitHub-hosted runners. Pushes and pull requests from branches in this repository run
+validation; pull requests from forks are intentionally skipped.
 
 ## How to extend the lab
 
