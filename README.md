@@ -86,8 +86,8 @@ even at zero traffic** — destroy the lab when you're not using it.*
 ### 1. Deploy (only after approval)
 
 ```bash
-python3 scripts/lab.py plan sandbox-20261010  # check AWS CLI/Terraform, then save a local plan
-python3 scripts/lab.py up sandbox-20261010    # deploy after reviewing the saved plan
+python3 scripts/lab.py plan sandbox-20261010 --allowed-edge-cidr 203.0.113.5/32  # save a reviewed, access-restricted plan
+python3 scripts/lab.py up sandbox-20261010 --allowed-edge-cidr 203.0.113.5/32    # deploy after reviewing the saved plan
 ```
 
 These commands create billable AWS resources. Approval and a reviewed Terraform plan are required
@@ -103,8 +103,8 @@ uses the legacy `terraform/terraform.tfstate`, always keeps
 `manage_account_region_singletons=false`, and does not configure an alarm email subscription.
 
 ```bash
-python3 scripts/lab.py plan sandbox-20261010  # inspect a saved local plan
-python3 scripts/lab.py up sandbox-20261010    # create the isolated lab
+python3 scripts/lab.py plan sandbox-20261010 --allowed-edge-cidr 203.0.113.5/32  # inspect a saved local plan
+python3 scripts/lab.py up sandbox-20261010 --allowed-edge-cidr 203.0.113.5/32    # create the isolated lab
 python3 scripts/lab.py verify sandbox-20261010
 python3 scripts/lab.py down sandbox-20261010 --confirm sandbox-20261010
 ```
@@ -112,8 +112,13 @@ python3 scripts/lab.py down sandbox-20261010 --confirm sandbox-20261010
 The identifier deterministically maps to `ai-rag-<id>`,
 `AIRagLab/Detections/<id>`, and `.lab-state/<id>/terraform.tfstate`. Use a new
 lowercase, hyphenated identifier for each disposable lab; the runner rejects default, shared, and
-legacy/collision-prone identifiers. `down` requires the identifier again in `--confirm` and removes
-the local state only after Terraform destroy succeeds.
+legacy/collision-prone identifiers. `plan` and `up` require at least one deliberate
+`--allowed-edge-cidr` IPv4 CIDR (repeat the flag for each authorized network); `0.0.0.0/0` is
+rejected. Obtain the CIDR from the network/operator responsible for the source that will run the
+live test (for a single approved workstation, use its approved public address as `/32`), then review
+it as part of the deployment decision. The runner never discovers or permits the caller's public IP
+automatically. `down` requires the identifier again in `--confirm` and removes the local state only
+after Terraform destroy succeeds.
 
 ### 2. Run an attack and see it caught
 
