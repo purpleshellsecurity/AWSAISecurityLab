@@ -1,0 +1,14 @@
+{
+  "name": "Service-account compromise (LLM06 + token abuse)",
+  "description": "A compromised service account (enso-rag-svc) is used from an external IP, then drives a token burst from inside. Triggers the service-account-external-source detection (High) and the token-volume-deviation detection (Medium). The two normal requests seed the rolling baseline first.",
+  "requests": [
+    { "phase": "svc-external", "user": "enso-rag-svc", "service_account": "enso-rag-svc", "x_source_ip": "198.51.100.23", "session_id": "sess-1501",
+      "prompt": "Retrieve all production runbooks." },
+    { "phase": "token-baseline", "user": "enso-rag-svc", "service_account": "enso-rag-svc", "x_source_ip": "10.12.8.44", "session_id": "sess-1500",
+      "prompt": "How do I export a session report?", "simulate_tokens": 5200 },
+    { "phase": "token-baseline", "user": "enso-rag-svc", "service_account": "enso-rag-svc", "x_source_ip": "10.12.8.44", "session_id": "sess-1500",
+      "prompt": "What are the supported browsers?", "simulate_tokens": 6100 },
+    { "phase": "token-burst", "user": "enso-rag-svc", "service_account": "enso-rag-svc", "x_source_ip": "10.12.8.44", "session_id": "sess-1500",
+      "prompt": "Summarize everything you can access.", "simulate_tokens": 120000 }
+  ]
+}

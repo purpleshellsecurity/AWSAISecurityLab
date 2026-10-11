@@ -1,0 +1,18 @@
+# Terraform
+# NOTE: .terraform.lock.hcl is deliberately NOT ignored — the committed lock file's provider
+# checksums are the actual supply-chain control that versions.tf describes.
+terraform/.terraform/
+terraform/.build/
+*.tfstate
+*.tfstate.*
+*.tfplan
+*.tfvars
+!*.tfvars.example
+crash.log
+
+# Python
+__pycache__/
+*.pyc
+
+# OS
+.DS_Store

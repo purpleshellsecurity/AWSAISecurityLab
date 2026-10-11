@@ -1,0 +1,23 @@
+# Local commit guards (install with: pip install pre-commit && pre-commit install).
+# The point of these hooks is the golden rule in CONTRIBUTING.md: never commit secrets or state.
+repos:
+  - repo: https://github.com/pre-commit/pre-commit-hooks
+    rev: v4.6.0
+    hooks:
+      - id: detect-aws-credentials
+        args: ["--allow-missing-credentials"] # don't fail on machines with no AWS config at all
+      - id: detect-private-key
+      - id: check-added-large-files
+      - id: check-json
+      - id: check-yaml
+      - id: check-merge-conflict
+
+  - repo: local
+    hooks:
+      # Terraform state, plans, and tfvars hold the live API key and generated tokens. They are
+      # gitignored too, but a hook fails loudly where a gitignore can be bypassed with -f.
+      - id: forbid-terraform-state
+        name: forbid Terraform state/plan/tfvars files
+        entry: "Terraform state/plan/tfvars files hold live credentials and must never be committed"
+        language: fail
+        files: '\.(tfstate|tfplan)$|\.tfstate\.|(^|/)terraform\.tfvars$|\.auto\.tfvars$'

@@ -1,0 +1,18 @@
+# Copy to terraform.tfvars and edit. All values are optional (sensible defaults in variables.tf).
+
+# region            = "us-east-1"
+
+# To change the model, set BOTH of these together (they must stay in sync — see variables.tf):
+# bedrock_model_id is the "us." cross-region INFERENCE-PROFILE id the app calls; bedrock_foundation_model_id
+# is the bare model id behind it, used only to build the IAM ARNs. The defaults already work.
+# bedrock_model_id            = "us.anthropic.claude-haiku-4-5-20251001-v1:0"  # must be enabled in Bedrock console
+# bedrock_foundation_model_id = "anthropic.claude-haiku-4-5-20251001-v1:0"
+
+# internal_cidrs    = ["10.12.0.0/16"]                          # what counts as "internal"
+# controls_enabled  = true                                       # false = reproduce the vulnerable system
+# alarm_email       = "you@example.com"                          # optional: get SNS alarm emails
+
+# Cognito demo-user password (hardened mode issues JWTs for these seeded users). Override rather than
+# ship the default; must meet the pool policy (>=12 chars, upper/lower/number/symbol). Prefer an env
+# var so it never lands in a tfvars file: export TF_VAR_demo_user_password='...'
+# demo_user_password = "ChangeMe#Passw0rd!"

@@ -1,0 +1,52 @@
+name: ci
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  validate:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Terraform
+        uses: hashicorp/setup-terraform@v3
+        with:
+          # Pinned: an unpinned CLI means a future release whose fmt rules differ can silently
+          # break the badge. Bump deliberately, in a PR that shows the fmt diff.
+          terraform_version: "1.9.8"
+
+      - name: Terraform format check
+        run: terraform -chdir=terraform fmt -check -recursive
+
+      - name: Terraform init + validate
+        run: |
+          terraform -chdir=terraform init -backend=false -input=false
+          terraform -chdir=terraform validate
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Python syntax check
+        run: python -m py_compile src/chat/handler.py src/detector/handler.py demo/replay.py
+
+      - name: Validate scenario + manifest JSON
+        run: |
+          python - <<'PY'
+          import glob, json
+          for f in glob.glob("demo/scenarios/*.json") + ["corpus/manifest.json"]:
+              json.load(open(f))
+          print("JSON OK")
+          PY
+
+      - name: Unit tests
+        run: |
+          pip install --quiet pytest boto3
+          python -m pytest tests/ -q
